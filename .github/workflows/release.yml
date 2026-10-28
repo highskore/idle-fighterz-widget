@@ -1,8 +1,9 @@
 # desktop widget builds for macOS, Windows and Linux. On every PR (and by hand) it builds all three unsigned and
 # smoke-tests the Windows and Linux ones. On a desktop-v* tag it signs what it has secrets for (macOS: sign and
 # notarize, ad-hoc otherwise; Windows: Authenticode, unsigned otherwise) and attaches every package plus one
-# SHA256SUMS to a GitHub Release. The secrets are listed in README.md ("Releasing"). The game comes in as a public
-# submodule (game/ → highskore/planet).
+# SHA256SUMS to a GitHub Release. The secrets live in the `release` environment, which only desktop-v* tags may use,
+# and each goes only to the step that needs it (docs/RELEASING.md). Third-party actions are pinned to commits. The
+# game comes in as a public submodule (game/ → highskore/planet).
 name: release
 
 on:
@@ -28,26 +29,22 @@ jobs:
           - { os: windows-latest, platform: windows } # NSIS -setup.exe and .msi
           - { os: ubuntu-22.04, platform: linux }    # .AppImage and .deb (22.04's glibc, so they run on older distros too)
     runs-on: ${{ matrix.os }}
-    env:
-      # signing only for a release tag: PR and manual builds never see the certificates. an unset secret is '', and
-      # every step that uses one checks for that first (an empty variable still counts as set to tauri)
-      APPLE_CERTIFICATE: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.APPLE_CERTIFICATE || '' }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-      APPLE_SIGNING_IDENTITY: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-      KEYCHAIN_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.KEYCHAIN_PASSWORD || '' }}
-      WINDOWS_CERTIFICATE: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.WINDOWS_CERTIFICATE || '' }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+    # the signing secrets are in the release environment, which only desktop-v* tags can use; PR and manual builds
+    # run with none. Each secret goes to the one step that needs it, and only on a tag (an unset one is '', which
+    # each of those steps checks for first: an empty variable still counts as set to tauri)
+    environment: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && 'release' || '' }}
     steps:
       # git for Windows checks text out with CRLF, and the game's page build matches its sources on \n
       - name: LF line endings
         if: matrix.platform == 'windows'
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -55,7 +52,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - uses: Swatinem/rust-cache@v2.7.8
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
           workspaces: src-tauri
           key: ${{ matrix.platform }}
@@ -66,12 +63,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf xvfb dbus-x11
 
+      # before any secret is in the job: npm's install scripts never run next to one
+      - name: node packages and the page
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund
+          npm run -s page
+
       # ---- macOS ----
 
       # the Developer ID certificate goes into a throwaway keychain that only this run unlocks
       - name: import signing certificate
-        if: matrix.platform == 'macos' && env.APPLE_CERTIFICATE != ''
+        id: cert
+        if: matrix.platform == 'macos' && startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then echo "no APPLE_CERTIFICATE: the app is ad-hoc signed"; exit 0; fi
           KC="$RUNNER_TEMP/signing.keychain-db"
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
@@ -82,35 +92,44 @@ jobs:
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -v -p codesigning "$KC"
+          echo "imported=true" >> "$GITHUB_OUTPUT"
 
-      # notarizing: an App Store Connect API key if it's there, else an Apple ID with an app-specific password
-      - name: notary credentials
-        if: matrix.platform == 'macos' && env.APPLE_SIGNING_IDENTITY != ''
-        env:
-          API_KEY: ${{ secrets.APPLE_API_KEY }}
-          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ -n "$API_KEY" ]; then
-            echo "$API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
-            { echo "APPLE_API_KEY=$API_KEY_ID"; echo "APPLE_API_ISSUER=$API_ISSUER"; echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"; } >> "$GITHUB_ENV"
-          elif [ -n "$APPLE_ID" ]; then
-            { echo "APPLE_ID=$APPLE_ID"; echo "APPLE_PASSWORD=$APPLE_PASSWORD"; echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"; } >> "$GITHUB_ENV"
-          else
-            echo "::warning::no notary credentials: the app is signed but not notarized"
-          fi
-
-      - name: build, sign, notarize (macOS)
+      # tauri builds and signs the app: it needs the identity's name, and no notary credentials
+      - name: build and sign (macOS)
         if: matrix.platform == 'macos'
-        run: scripts/release.sh
+        run: scripts/release.sh build
         env:
           TARGET: universal-apple-darwin
+          APPLE_SIGNING_IDENTITY: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+
+      # notarizing, after the build: an App Store Connect API key if it's there, else an Apple ID with an
+      # app-specific password. They're only in this step, and the key file only while it runs
+      - name: notarize and package (macOS)
+        if: matrix.platform == 'macos'
+        env:
+          TARGET: universal-apple-darwin
+          APPLE_SIGNING_IDENTITY: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          API_KEY: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_API_KEY || '' }}
+          API_KEY_ID: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_API_KEY_ID || '' }}
+          API_ISSUER: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_API_ISSUER || '' }}
+          NOTARY_APPLE_ID: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_ID || '' }}
+          NOTARY_PASSWORD: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_PASSWORD || '' }}
+          NOTARY_TEAM_ID: ${{ steps.cert.outputs.imported == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
+          if [ -n "$API_KEY" ]; then
+            (umask 077; printf '%s\n' "$API_KEY" > "$RUNNER_TEMP/AuthKey.p8")
+            export APPLE_API_KEY="$API_KEY_ID" APPLE_API_ISSUER="$API_ISSUER" APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          elif [ -n "$NOTARY_APPLE_ID" ]; then
+            export APPLE_ID="$NOTARY_APPLE_ID" APPLE_PASSWORD="$NOTARY_PASSWORD" APPLE_TEAM_ID="$NOTARY_TEAM_ID"
+          elif [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::warning::no notary credentials: the app is signed but not notarized"
+          fi
+          unset API_KEY NOTARY_PASSWORD
+          scripts/release.sh package
 
       - name: clean up the keychain
-        if: always() && matrix.platform == 'macos' && env.APPLE_CERTIFICATE != ''
+        if: always() && steps.cert.outputs.imported == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
       # ---- Windows ----
@@ -118,9 +137,13 @@ jobs:
       # the code-signing certificate goes into the runner user's store; tauri signs the exe, the installer and the msi
       # with it by thumbprint (signtool, timestamped)
       - name: import code-signing certificate (Windows)
-        if: matrix.platform == 'windows' && env.WINDOWS_CERTIFICATE != ''
+        if: matrix.platform == 'windows' && startsWith(github.ref, 'refs/tags/desktop-v')
         shell: powershell
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { 'no WINDOWS_CERTIFICATE: the Windows packages are unsigned'; exit 0 }
           $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
           $imp = @{ FilePath = $pfx; CertStoreLocation = 'Cert:\CurrentUser\My' }
@@ -137,8 +160,6 @@ jobs:
         if: matrix.platform != 'macos'
         shell: bash
         run: |
-          npm ci --no-audit --no-fund
-          npm run -s page
           npx tauri build ${SIGN_CONFIG:+--config "$SIGN_CONFIG"}
           B=src-tauri/target/release/bundle
           mkdir -p release
@@ -182,7 +203,7 @@ jobs:
           cat run.log
           grep -q 'no compositor' run.log
 
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: powerrr-${{ matrix.platform }}
           path: |
@@ -202,16 +223,24 @@ jobs:
     needs: build
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: powerrr-windows
           path: release
 
+      # a release ships only what the site serves: on a tag a difference fails (and the release needs this job)
       - name: the copy matches highskore.com
         shell: bash
-        run: curl -fsSL https://highskore.com/install.ps1 | cmp - packaging/install.ps1 || echo "::warning::packaging/install.ps1 differs from https://highskore.com/install.ps1"
+        run: |
+          curl -fsSL https://highskore.com/install.ps1 | cmp - packaging/install.ps1 && exit 0
+          case "$GITHUB_REF" in
+            refs/tags/desktop-v*) echo "::error::packaging/install.ps1 differs from https://highskore.com/install.ps1"; exit 1 ;;
+            *) echo "::warning::packaging/install.ps1 differs from https://highskore.com/install.ps1" ;;
+          esac
 
       - name: install.ps1
         shell: powershell
@@ -305,15 +334,18 @@ jobs:
           exit 0 # a PowerShell step ends with $LASTEXITCODE, which an expected install.ps1 failure may have left at 1
 
   release:
-    needs: build
+    needs: [build, install-ps1]
     if: startsWith(github.ref, 'refs/tags/desktop-v')
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: release
           merge-multiple: true

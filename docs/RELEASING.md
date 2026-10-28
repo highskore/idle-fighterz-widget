@@ -40,7 +40,42 @@ Push a tag like `desktop-v0.1.0` (matching `version` in `tauri.conf.json`). The 
 
 Every pull request (and a manual run from the Actions tab) builds all three, unsigned, and smoke-tests two: on Windows it runs the installer silently, starts the app and checks a second launch hands over and exits; on Linux it installs the `.deb` and runs the AppImage under Xvfb, which has no compositor, so it checks the fallback to window mode too. The packages are attached to the run as artifacts. Signing secrets are only read for `desktop-v*` tags.
 
-Secrets to add yourself (repo → Settings → Secrets and variables → Actions):
+### Where the secrets live
+
+The signing secrets are kept in a GitHub **environment** called `release`, not at repo level. Only jobs that name it can read them, and only runs from a `desktop-v*` tag can use it: the `build` and `release` jobs name it on a tag run alone, so pull requests and manual runs never get them. Within a job each secret is passed to the one step that needs it, never to the whole job: npm's install scripts, the crates' build scripts and third-party actions don't run next to any of them. The certificate import gets the certificate and its password; the macOS build gets only the identity's name; the notarizing step gets the notary credentials after the build has finished; the Windows build signs by thumbprint from the certificate store. Every third-party action is pinned to a commit.
+
+One-time setup, with `gh` (repo admin):
+
+1. Create the environment, open only to `desktop-v*` tags:
+   ```sh
+   gh api -X PUT repos/highskore/powerrr/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/highskore/powerrr/environments/release/deployment-branch-policies -f name='desktop-v*' -f type=tag
+   gh api repos/highskore/powerrr/environments/release/deployment-branch-policies   # one policy: desktop-v*, type tag
+   ```
+2. Move the secrets into it: set each one on the environment (below), then delete the repo-level copy. `gh` asks for each value, so nothing lands in your shell history:
+   ```sh
+   gh secret list -R highskore/powerrr                         # the repo-level ones to move
+   gh secret set APPLE_CERTIFICATE -R highskore/powerrr --env release   # …and so on for each secret below
+   gh secret delete APPLE_CERTIFICATE -R highskore/powerrr     # the repo-level copy, once the environment has it
+   gh secret list -R highskore/powerrr --env release
+   ```
+3. Protect the tags, so only you can create, move or delete a `desktop-v*` tag (anyone who could push one could run the release with its secrets):
+   ```sh
+   gh api -X POST repos/highskore/powerrr/rulesets --input - <<'JSON'
+   {
+     "name": "release tags",
+     "target": "tag",
+     "enforcement": "active",
+     "conditions": { "ref_name": { "include": ["refs/tags/desktop-v*"], "exclude": [] } },
+     "rules": [{ "type": "creation" }, { "type": "update" }, { "type": "deletion" }, { "type": "non_fast_forward" }],
+     "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }]
+   }
+   JSON
+   ```
+   `actor_id: 5` is the repository admin role: admins (you) can still push release tags, nobody else can.
+
+Secrets to add yourself, to the `release` environment (repo → Settings → Environments → release, or `gh secret set NAME --env release`):
 
 - [ ] `APPLE_CERTIFICATE`: the Developer ID Application certificate and its private key as a base64 `.p12`. In Keychain Access → login → My Certificates, right-click "Developer ID Application: …" → Export → `.p12` with a password, then `base64 -i cert.p12 | pbcopy`.
 - [ ] `APPLE_CERTIFICATE_PASSWORD`: the password you gave the `.p12`.
@@ -93,6 +128,6 @@ On macOS it fetches the latest release of `highskore/powerrr`, checks the zip ag
 ## First release, in order
 
 1. Create the public repo `highskore/homebrew-tap` (empty, with a `Casks/` folder).
-2. Add the secrets above to `highskore/powerrr`.
+2. Set up the `release` environment and the tag ruleset, and add the secrets above to the environment (see "Where the secrets live").
 3. Set `version` in `src-tauri/tauri.conf.json` (and `package.json`, `Cargo.toml`), commit, tag `desktop-v<version>`, push the tag. Watch the workflow; download the dmg and check `spctl -a -vv "/Volumes/Powerrr/Powerrr.app"`.
 4. Run `packaging/bump-cask.sh <version> <tap checkout>`, push the tap, then try `brew install --cask highskore/tap/powerrr` and the curl line.
