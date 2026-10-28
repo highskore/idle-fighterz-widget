@@ -59,6 +59,22 @@ struct State {
     tray_nudge: Mutex<Option<Sender<()>>>, // wakes the tray icon's watcher (Windows, Linux) when settings change
 }
 
+// the defaults with a saved file over them
+fn initial_settings(saved: Option<&Value>) -> Value {
+    let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings["shortcut"] = json!(SHORTCUT);
+    }
+    if let Some(saved) = saved {
+        merge(&mut settings, saved);
+    }
+    if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
+        settings["layout"] = json!(7); // layouts 4 and 5 were dropped
+    }
+    settings
+}
+
 fn merge(base: &mut Value, over: &Value) {
     let (Some(b), Some(o)) = (base.as_object_mut(), over.as_object()) else { return };
     for (k, v) in o {
@@ -316,18 +332,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
             let file = app.path().app_config_dir()?.join("settings.json");
-            let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
-            #[cfg(not(target_os = "macos"))]
-            {
-                settings["shortcut"] = json!(SHORTCUT);
-            }
             let saved = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-            if let Some(saved) = &saved {
-                merge(&mut settings, saved);
-            }
-            if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
-                settings["layout"] = json!(7); // layouts 4 and 5 were dropped
-            }
+            let settings = initial_settings(saved.as_ref());
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
@@ -625,6 +631,29 @@ mod tests {
         webview::InvokeRequest,
         WebviewUrl, WebviewWindowBuilder,
     };
+
+    // a settings.json as 0.1.1 saved it: its keys carry over, the ones added since get their defaults, layout 4 is gone
+    #[test]
+    fn a_0_1_1_settings_file_merges() {
+        let saved = json!({
+            "on_top": false, "size": "large", "opacity": 0.8, "layout": 4, "hud": "always", "clouds": "never", "cloud_shape": "c",
+            "cloud_amount": 3, "mode": "window",
+            "notify": { "raid": false, "shenron": true, "trip": true, "pod": true, "ascend": true },
+            "quiet": { "on": true, "from": "23:00", "to": "07:00" },
+            "shortcut": "Alt+Cmd+KeyO"
+        });
+        let s = super::initial_settings(Some(&saved));
+        assert_eq!((s["fps"].clone(), s["menubar_power"].clone(), s["tray_icon"].clone()), (json!(30), json!(true), json!("auto")));
+        assert_eq!(s["layout"], json!(7));
+        assert_eq!((s["on_top"].clone(), s["size"].clone(), s["mode"].clone()), (json!(false), json!("large"), json!("window")));
+        assert_eq!(s["notify"]["pod"], json!(true));
+        assert_eq!(s["quiet"]["from"], json!("23:00"));
+        assert_eq!(s["shortcut"], json!("Alt+Cmd+KeyO"));
+        for layout in [7, 1, 2, 3, 6] {
+            assert_eq!(super::initial_settings(Some(&json!({ "layout": layout })))["layout"], json!(layout));
+        }
+        assert_eq!(super::initial_settings(Some(&json!({ "layout": 5 })))["layout"], json!(7));
+    }
 
     // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
     #[test]
