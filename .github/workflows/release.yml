@@ -1,0 +1,87 @@
+# desktop widget release: on a desktop-v* tag, build the universal macOS app, sign and notarize it when the Apple
+# secrets are set (ad-hoc signed otherwise), and attach a .dmg, a .zip and SHA256SUMS to a GitHub Release.
+# The secrets are listed in README.md ("Releasing"). The game comes in as a public submodule (game/ → highskore/planet).
+name: release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22
+
+      - name: rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # the Developer ID certificate goes into a throwaway keychain that only this run unlocks
+      - name: import signing certificate
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KC"
+
+      # notarizing: an App Store Connect API key if it's there, else an Apple ID with an app-specific password
+      - name: notary credentials
+        if: env.APPLE_SIGNING_IDENTITY != ''
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$API_KEY" ]; then
+            echo "$API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+            { echo "APPLE_API_KEY=$API_KEY_ID"; echo "APPLE_API_ISSUER=$API_ISSUER"; echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"; } >> "$GITHUB_ENV"
+          elif [ -n "$APPLE_ID" ]; then
+            { echo "APPLE_ID=$APPLE_ID"; echo "APPLE_PASSWORD=$APPLE_PASSWORD"; echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"; } >> "$GITHUB_ENV"
+          else
+            echo "::warning::no notary credentials: the app is signed but not notarized"
+          fi
+
+      - name: build, sign, notarize
+        run: scripts/release.sh
+        env:
+          TARGET: universal-apple-darwin
+
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release
+          VERSION="${GITHUB_REF_NAME#desktop-v}"
+          NAME=$(node -p "require('../src-tauri/tauri.conf.json').productName")
+          NOTE="$NAME $VERSION for macOS 11+ (Apple silicon and Intel)."
+          [ -z "$APPLE_SIGNING_IDENTITY" ] && NOTE="$NOTE This build is not notarized: right-click the app → Open the first time."
+          gh release create "$GITHUB_REF_NAME" *.dmg *.zip SHA256SUMS --title "$NAME $VERSION" --notes "$NOTE"
+
+      - name: clean up the keychain
+        if: always() && env.APPLE_CERTIFICATE != ''
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true

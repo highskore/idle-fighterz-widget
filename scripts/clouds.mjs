@@ -1,4 +1,4 @@
-// Checks the widget's cloud templates (CLOUD_TPL in planet/game.js) and draws every variant on one contact sheet.
+// Checks the widget's cloud templates (CLOUD_TPL in game/game.js) and draws every variant on one contact sheet.
 // For every template, both mirrors, scales 0.7-1.3 at the planet sizes the widget uses (56 and 70 px), lobes a pixel
 // smaller, as is and a pixel bigger, with and without the extra top lobe, it asserts:
 //   - one connected silhouette (no separate balls), from 2-4 lobes that each overlap a neighbour by at least 40%
@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateSync } from 'node:zlib'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'planet', 'game.js'), 'utf8')
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'game', 'game.js'), 'utf8')
 const TPL = Function('return ' + src.match(/const CLOUD_TPL = (\[[\s\S]*?\n {4}\]);/)[1])()
 const NAMES = [...src.match(/const CLOUD_TPL = \[([\s\S]*?)\n {4}\];/)[1].matchAll(/\/\/ (.*)/g)].map(m => m[1])
 

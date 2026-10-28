@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the app (named by productName in tauri.conf.json), signs it with your Developer ID (hardened runtime), notarizes and staples it, and packs a
-# .dmg and a .zip with their sha256 sums into desktop/release/. See desktop/README.md, "Releasing".
+# .dmg and a .zip with their sha256 sums into release/. See README.md, "Releasing".
 #
 #   APPLE_SIGNING_IDENTITY   "Developer ID Application: Your Name (TEAMID)", in your keychain. Unset: ad-hoc signed,
 #                            not notarized (runs here; elsewhere it needs right-click → Open)

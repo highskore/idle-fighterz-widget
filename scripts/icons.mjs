@@ -1,5 +1,5 @@
 // Renders the app icon (a four-star dragon ball, 32×32 pixel art, dithered like the game) and the menu-bar
-// template icon, scaled up pixel-exact to every size the bundle needs. Run: pnpm icons
+// template icon, scaled up pixel-exact to every size the bundle needs. Run: npm run icons
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -1,13 +1,19 @@
-# Powerrr (desktop widget)
+# Powerrr
 
-The homepage's idle planet game as a macOS desktop pet: a frameless [Tauri v2](https://v2.tauri.app) window with the planet and its runner floating over the wallpaper, and a menu-bar icon. The name is set once, `productName` in `src-tauri/tauri.conf.json` ("Powerrr"; the UI writes it lowercase), and everything else reads it from there. The bundle id is `com.highskore.powerrr`.
+The [highskore.com](https://highskore.com) idle planet game as a macOS desktop pet: a frameless [Tauri v2](https://v2.tauri.app) window with the planet and its runner floating over the wallpaper, and a menu-bar icon. The name is set once, `productName` in `src-tauri/tauri.conf.json` ("Powerrr"; the UI writes it lowercase), and everything else reads it from there. The bundle id is `com.highskore.powerrr`.
+
+The game is [highskore/planet](https://github.com/highskore/planet), a submodule at `game/`. You need Node, Rust and Xcode's command line tools.
 
 ```sh
-pnpm build:desktop          # from the repo root: widget page, then the release .app (ad-hoc signed)
-# → desktop/src-tauri/target/release/bundle/macos/Powerrr.app
+git clone --recurse-submodules https://github.com/highskore/powerrr.git && cd powerrr
+npm ci
+npm run build               # widget page, then the release .app (ad-hoc signed)
+# → src-tauri/target/release/bundle/macos/Powerrr.app
 ```
 
-- **Page**: `node planet/build.mjs --widget` writes `dist/index.html` under the directory it runs from (here `desktop/`). It's the same page with `<html class="widget">`, the code fenced by `/*widget*/…/*/widget*/` in `planet/page.html`, `planet/game.js` and `planet/world.js` kept, `planet/widget.css` and `planet/widget.js` filled in, no CDN three.js (only the title used it) and the fonts inlined from `@fontsource` in the local `node_modules`. The site build drops the fenced code, so `public/planet.html` doesn't change.
+In an existing clone, `git submodule update --init` fetches the game; `git submodule update --remote game` moves it to the game's latest commit (commit the new pointer).
+
+- **Page**: `node game/build.mjs --widget` (`npm run page`) writes `dist/index.html` under the directory it runs from (here the repo root). It's the same page with `<html class="widget">`, the code fenced by `/*widget*/…/*/widget*/` in `game/page.html`, `game/game.js` and `game/world.js` kept, `game/widget.css` and `game/widget.js` filled in, no CDN three.js (only the title used it) and the fonts inlined from `@fontsource` in the local `node_modules`. The site build drops the fenced code, so the homepage doesn't change.
 - **Floating** (the default mode): the game starts at once, with no title, links or card, and no sky or backdrop in any scene. Solid sprites get a 1px dark rim so they read on any wallpaper. Nothing fades at the window edges; instead the scene has room: the planet keeps the site's size against the sprites (56–70 px across its radius, as on phones and desktops), the pixel art is 1× at small and medium and 2× at large, and the window is big enough round it for the giant ape, Nappa and the raids. Clouds, if on (always, while the pointer is over the widget, or never), are a finite cloud of whole outlined puffs in one of these shapes: drifting puffs (the default), whose cloud amount slider (1–5, default 2) adds clouds from a ranked list of spots clear of the planet and the hero's path, from three clouds up to a full scattered sea; every cloud is one of seven hand-made cumulus templates (checked by `npm run clouds`, which also draws them all on a contact sheet), mirrored and scaled per spot; or dock clouds (staggered rows along the dock like the site's cloud sea), a bank under the planet, a halo round it, or a plate it rests on.
 - **Window mode** (a setting, live): an opaque rounded card with the site's skies, cloud sea and world backdrops, a shadow, and a free resize.
 - **HUD**: five layouts. Dock (the default) is one pill under the planet with the power level, the form and a thin bar to the next one, dragon balls and wishes once there are any, and round icon buttons; floating, the game canvas stops above it so nothing runs under it. Also ring, pill bar, corner chips and top strip. It shows while the pointer is over the window and fades after a few idle seconds, or it can stay up. Idle, the game draws at 15fps instead of 30. The ki training tree, angels, achievements and characters scroll down in one column, never sideways.
@@ -19,17 +25,15 @@ pnpm build:desktop          # from the repo root: widget page, then the release 
 - **Menu bar**: show/hide, settings, always on top, size (small 300, medium 400, large 560 pt), launch at login, quit. Position and settings are kept between launches. The game isn't saved, same as on the site.
 - **Icons**: `npm run icons` renders the pixel-art dragon ball app icon and the menu-bar template icon into `src-tauri/icons/`.
 
-This uses npm, not pnpm, because the repo's pnpm 7.9 fails to fetch from the registry on Node 25 (`ERR_INVALID_THIS`).
-
 ## Releasing
 
-The widget is meant to ship from its own public repo, `highskore/powerrr`, with the game in a public submodule (`highskore/planet`), so anyone can build it from source and the release workflow needs no deploy key. Until that split, everything below lives here: `desktop/` is the widget and `.github/workflows/desktop-release.yml` builds it (its `DESKTOP` variable becomes `.` once `desktop/` is the repo root).
+The game is a public submodule, so anyone can build the widget from source and the release workflow (`.github/workflows/release.yml`) needs no deploy key.
 
-A notarized build is what makes installing smooth: downloaded from a browser, or through Homebrew, an app that isn't notarized is stopped by Gatekeeper, and people have to right-click → Open (or allow it in System Settings → Privacy & Security). A plain `pnpm build:desktop` is ad-hoc signed: fine on your own Mac, not for handing out.
+A notarized build is what makes installing smooth: downloaded from a browser, or through Homebrew, an app that isn't notarized is stopped by Gatekeeper, and people have to right-click → Open (or allow it in System Settings → Privacy & Security). A plain `npm run build` is ad-hoc signed: fine on your own Mac, not for handing out.
 
 ### What it does
 
-`desktop/scripts/release.sh` builds the universal app (Apple silicon and Intel), signs it with your Developer ID under the hardened runtime, notarizes it with `notarytool`, staples the ticket, and packs `Powerrr_<version>_universal.dmg`, `…universal.zip` and `SHA256SUMS` into `desktop/release/`. Without `APPLE_SIGNING_IDENTITY` it makes the same files, ad-hoc signed and not notarized.
+`scripts/release.sh` builds the universal app (Apple silicon and Intel), signs it with your Developer ID under the hardened runtime, notarizes it with `notarytool`, staples the ticket, and packs `Powerrr_<version>_universal.dmg`, `…universal.zip` and `SHA256SUMS` into `release/`. Without `APPLE_SIGNING_IDENTITY` it makes the same files, ad-hoc signed and not notarized.
 
 No entitlements file: the app isn't sandboxed, the transparent window uses a private AppKit API that needs no entitlement outside the App Store, notifications need none, and WebKit's JIT runs in WebKit's own processes. The signing identity in `tauri.conf.json` is `"-"` (ad-hoc), which `APPLE_SIGNING_IDENTITY` overrides.
 
@@ -51,7 +55,7 @@ xcrun notarytool store-credentials powerrr \
 # or: --apple-id you@example.com --team-id TEAMID   (it asks for the app-specific password)
 
 APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=powerrr \
-  desktop/scripts/release.sh
+  scripts/release.sh
 ```
 
 It checks the result with `spctl`, which should say `source=Notarized Developer ID`. The script also takes `APPLE_API_KEY` (key id), `APPLE_API_ISSUER` and `APPLE_API_KEY_PATH`, or `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID`, instead of a profile. `TARGET=aarch64-apple-darwin` builds for Apple silicon only, which is quicker.
@@ -74,16 +78,16 @@ Delete the exported `.p12` and keep the `.p8` somewhere safe once they're in.
 
 ### Homebrew
 
-`desktop/packaging/powerrr.rb` is a cask for a tap repo, `highskore/homebrew-tap`, so the install is `brew install --cask highskore/tap/powerrr`. After each release:
+`packaging/powerrr.rb` is a cask for a tap repo, `highskore/homebrew-tap`, so the install is `brew install --cask highskore/tap/powerrr`. After each release:
 
 ```sh
-desktop/packaging/bump-cask.sh 0.1.0 ~/code/homebrew-tap   # version + sha256 from the release's SHA256SUMS, copied to Casks/
+packaging/bump-cask.sh 0.1.0 ~/code/homebrew-tap   # version + sha256 from the release's SHA256SUMS, copied to Casks/
 cd ~/code/homebrew-tap && git commit -am "powerrr 0.1.0" && git push
 ```
 
 ### curl
 
-`public/install.sh` is served at `https://highskore.com/install.sh`:
+The installer is served from the highskore.com repo as `https://highskore.com/install.sh`:
 
 ```sh
 curl -fsSL https://highskore.com/install.sh | sh
@@ -93,7 +97,7 @@ It fetches the latest release of `highskore/powerrr`, checks the zip against `SH
 
 ### First release, in order
 
-1. Create the public repos `highskore/powerrr` (the widget) and `highskore/homebrew-tap` (empty, with a `Casks/` folder), and split the widget out with the game as a submodule.
+1. Create the public repo `highskore/homebrew-tap` (empty, with a `Casks/` folder).
 2. Add the secrets above to `highskore/powerrr`.
 3. Set `version` in `src-tauri/tauri.conf.json` (and `package.json`, `Cargo.toml`), commit, tag `desktop-v<version>`, push the tag. Watch the workflow; download the dmg and check `spctl -a -vv "/Volumes/Powerrr/Powerrr.app"`.
 4. Run `packaging/bump-cask.sh <version> <tap checkout>`, push the tap, then try `brew install --cask highskore/tap/powerrr` and the curl line.

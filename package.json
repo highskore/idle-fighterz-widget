@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "page": "node ../planet/build.mjs --widget && cp settings.html dist/",
+    "page": "node game/build.mjs --widget && cp settings.html dist/",
     "icons": "node scripts/icons.mjs",
     "clouds": "node scripts/clouds.mjs",
     "dev": "npm run -s page && tauri dev",
