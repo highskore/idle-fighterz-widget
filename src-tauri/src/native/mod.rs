@@ -73,7 +73,7 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
         let tick = Duration::from_secs_f64(1.0 / FPS);
         let mut next = Instant::now();
         let mut visible = true;
-        for n in 0u64.. {
+        for n in 0u64..=u64::MAX {
             next += tick;
             let now = Instant::now();
             if next > now {
@@ -128,7 +128,7 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
 // a premultiplied RGBA copy of the frame, owned by the image
 fn image(space: &CGColorSpace, w: u32, h: u32, rgba: &[u8]) -> CFRetained<CGImage> {
     let mut px = rgba.to_vec().into_boxed_slice();
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         let a = p[3] as u16;
         if a != 255 {
             for c in &mut p[..3] {
