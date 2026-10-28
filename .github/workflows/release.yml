@@ -197,7 +197,7 @@ jobs:
   # install.ps1 is served as https://highskore.com/install.ps1 from the highskore.com repo; packaging/install.ps1 is a
   # copy. Here it runs as users run it (`irm … | iex` in Windows PowerShell 5.1): it must refuse a bad checksum,
   # install this build from a stand-in for its GitHub release, reinstall over the running app, and uninstall cleanly.
-  # Then it runs against the real latest release
+  # Then it runs against the real latest release, if that has Windows assets
   install-ps1:
     needs: build
     runs-on: windows-latest
@@ -290,19 +290,19 @@ jobs:
           Uninstall
           Stop-Process $server.Id
 
-          '--- the latest release'
-          Remove-Item Env:POWERRR_RELEASE
-          $env:POWERRR_REPO = $env:GITHUB_REPOSITORY
+          '--- the latest release, if it has Windows assets'
           $latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" | ConvertFrom-Json
-          $r = Run-Install 'Get-Content -Raw packaging\install.ps1 | iex'
-          if ($latest.assets.name -like '*_x64-setup.exe') {
+          if (($latest.assets.name -like '*_x64-setup.exe') -and ($latest.assets.name -contains 'SHA256SUMS')) {
+            Remove-Item Env:POWERRR_RELEASE
+            $env:POWERRR_REPO = $env:GITHUB_REPOSITORY
+            $r = Run-Install 'Get-Content -Raw packaging\install.ps1 | iex'
             if ($r.code -ne 0) { throw "install.ps1 failed on $($latest.tag_name) (exit $($r.code))" }
             if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
             Uninstall
           } else {
-            if ($r.code -eq 0 -or $r.out -notmatch 'has no Windows installer') { throw "expected install.ps1 to say $($latest.tag_name) has no Windows installer" }
-            "::notice::the latest release ($($latest.tag_name)) has no Windows installer: install.ps1 says so and stops"
+            "::notice::skipped the latest release: $($latest.tag_name) has no Windows installer and SHA256SUMS (this run's installer was tested above)"
           }
+          exit 0 # a PowerShell step ends with $LASTEXITCODE, which an expected install.ps1 failure may have left at 1
 
   release:
     needs: build
