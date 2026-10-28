@@ -37,6 +37,10 @@ struct Tray {
     top: CheckMenuItem<Wry>,
     sizes: Vec<CheckMenuItem<Wry>>,
     login: CheckMenuItem<Wry>,
+    #[cfg(target_os = "linux")]
+    menu: Menu<Wry>,
+    #[cfg(target_os = "linux")]
+    power: MenuItem<Wry>, // a greyed-out first item, in the menu only while the power level is shown
 }
 
 struct State {
@@ -156,13 +160,30 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
 }
 
 // the power level beside the menu-bar icon, or the icon alone when that's turned off. Windows trays have no title, so
-// it goes in the tooltip; Linux trays have no tooltip, but an AppIndicator label beside the icon
+// it goes in the tooltip. Linux trays (AppIndicator) have no tooltip, and only some panels show its label beside the
+// icon (GNOME's AppIndicator extension does, KDE Plasma doesn't), so there it's also the menu's first item
 fn show_power(app: &AppHandle, s: &Value) {
     let Some(tray) = app.tray_by_id("tray") else { return };
     let power = app.state::<State>().power.lock().unwrap().clone();
     let on = s["menubar_power"].as_bool().unwrap_or(true) && !power.is_empty();
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let _ = tray.set_title(on.then_some(power));
+    #[cfg(target_os = "linux")]
+    {
+        let _ = tray.set_title(on.then_some(&power));
+        let items = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| (t.menu.clone(), t.power.clone()));
+        if let Some((menu, item)) = items {
+            let listed = menu.get(item.id()).is_some();
+            if on {
+                let _ = item.set_text(format!("Power {power}"));
+            }
+            if on && !listed {
+                let _ = menu.insert(&item, 0);
+            } else if !on && listed {
+                let _ = menu.remove(&item);
+            }
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         let name = &app.package_info().name;
@@ -428,6 +449,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    *app.state::<State>().tray.lock().unwrap() = Some(Tray { show, top, sizes, login });
+    *app.state::<State>().tray.lock().unwrap() = Some(Tray {
+        show,
+        top,
+        sizes,
+        login,
+        #[cfg(target_os = "linux")]
+        menu,
+        #[cfg(target_os = "linux")]
+        power: MenuItem::with_id(app, "power", "", false, none)?,
+    });
     Ok(())
 }
