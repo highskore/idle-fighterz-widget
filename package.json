@@ -2,6 +2,7 @@
   "name": "powerrr",
   "version": "0.1.1",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "page": "node game/build.mjs --widget && cp settings.html dist/",
     "icons": "node scripts/icons.mjs",

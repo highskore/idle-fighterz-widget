@@ -2,7 +2,7 @@
     "version": "0.1.1",
     "description": "Idle Dragon Ball planet game as a desktop widget",
     "homepage": "https://github.com/highskore/powerrr",
-    "license": "Proprietary",
+    "license": "MIT",
     "notes": "Powerrr lives in the tray; Ctrl+Alt+P shows or hides it.",
     "architecture": {
         "64bit": {
