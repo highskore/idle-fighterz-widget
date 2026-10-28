@@ -4,6 +4,7 @@
 use planet_core::{bridge::Bridge, Game};
 use std::{
     fs,
+    io::Read,
     panic::AssertUnwindSafe,
     path::PathBuf,
     sync::{
@@ -33,14 +34,14 @@ impl Core {
     /// A new game seeded with `seed`, carrying over what the save in `file` keeps (its daily bonus date).
     pub fn new(seed: u32, file: PathBuf) -> Self {
         let mut bridge = Bridge::new(seed, SIZE.0, SIZE.1, SIZE.2);
-        let small = fs::metadata(&file).is_ok_and(|m| m.len() <= MAX_SAVE as u64);
-        if let Some(saved) = small.then(|| fs::read_to_string(&file).ok()).flatten().filter(|s| loadable(s)) {
+        if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
         Core { bridge: Mutex::new(bridge), file, hovered: AtomicBool::new(false) }
     }
 
-    // a panic in the game fails the one call (debug builds; release aborts on panic) and leaves the game usable
+    // only in debug builds does a panic in the game fail just the one call: release builds have panic = "abort", so
+    // there it ends the app and this catches nothing
     fn with<T>(&self, f: impl FnOnce(&mut Bridge) -> T) -> Result<T, String> {
         let mut b = self.bridge.lock().unwrap_or_else(|e| e.into_inner());
         std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut b))).map_err(|e| {
@@ -64,6 +65,16 @@ impl Core {
         let _ = fs::create_dir_all(self.file.parent().unwrap());
         let _ = fs::write(&self.file, text);
     }
+}
+
+// the save, if it's a regular file (not a link) of at most MAX_SAVE bytes, read through a cap in case it grows meanwhile
+fn read_save(file: &PathBuf) -> Option<String> {
+    if !fs::symlink_metadata(file).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut text = String::new();
+    fs::File::open(file).ok()?.take(MAX_SAVE as u64 + 1).read_to_string(&mut text).ok()?;
+    (text.len() <= MAX_SAVE).then_some(text)
 }
 
 // at most MAX_SAVE bytes and MAX_DEPTH levels of [ and {, outside strings
@@ -104,7 +115,9 @@ pub fn run(app: AppHandle, idle_fps: fn(&AppHandle) -> f64) {
         let (mut last, mut saved, mut checked) = (Instant::now(), Instant::now(), Instant::now());
         let mut visible = true;
         loop {
+
             if checked.elapsed() >= Duration::from_millis(250) {
+
                 checked = Instant::now();
                 visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(true);
             }
@@ -461,6 +474,24 @@ mod tests {
         let _ = fs::remove_file(f);
     }
 
+
+    #[test]
+    fn only_a_small_regular_file_is_read() {
+        let f = file("big");
+        fs::write(&f, " ".repeat(MAX_SAVE + 1)).unwrap();
+        assert!(read_save(&f).is_none());
+        fs::write(&f, "{}").unwrap();
+        assert_eq!(read_save(&f).as_deref(), Some("{}"));
+        #[cfg(unix)]
+        {
+            let link = file("link");
+            std::os::unix::fs::symlink(&f, &link).unwrap();
+            assert!(read_save(&link).is_none(), "a link is followed");
+            let _ = fs::remove_file(link);
+        }
+        let _ = fs::remove_file(f);
+    }
+
     #[test]
     fn a_crafted_save_is_never_parsed() {
         let f = file("deep");
@@ -471,6 +502,5 @@ mod tests {
         assert!(loadable(&format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40))), "brackets in a string are text");
         assert!(!loadable(&" ".repeat(MAX_SAVE + 1)));
         let _ = fs::remove_file(f);
-
     }
 }
