@@ -148,7 +148,8 @@ jobs:
           ls -l release
 
       # install it the way install.ps1 does, start it, and check it's still up after a while; a second launch must hand
-      # over to the first and exit
+      # over to the first and exit. POWERRR_SMOKE hides the widget after 8 s: WebView2 must then tell the page it's
+      # hidden, and the page must keep the game going headless (the tray number is on by default)
       - name: smoke test (Windows)
         if: matrix.platform == 'windows'
         shell: powershell
@@ -161,16 +162,21 @@ jobs:
           $exe = Get-ChildItem "$env:LOCALAPPDATA\Powerrr\*.exe" | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
           if (-not $exe) { throw 'nothing installed in %LOCALAPPDATA%\Powerrr' }
           "installed $($exe.FullName)"
+          $env:POWERRR_SMOKE = "$env:RUNNER_TEMP\smoke.log"
           $p = Start-Process $exe.FullName -PassThru
+          Remove-Item Env:POWERRR_SMOKE
           Start-Sleep 20
           if ($p.HasExited) { throw "exited with $($p.ExitCode)" }
+          Get-Content "$env:RUNNER_TEMP\smoke.log"
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'page hidden=true away=true ticking=true' -Quiet)) { throw 'hidden, the page did not see document.hidden and tick headless' }
           $second = Start-Process $exe.FullName -PassThru
           if (-not $second.WaitForExit(15000)) { throw 'a second launch kept running' }
           if ($p.HasExited) { throw 'the first instance died' }
           Stop-Process $p.Id
           'ok'
 
-      # the AppImage under Xvfb, which has no compositor: it must fall back to window mode rather than fail
+      # the AppImage under Xvfb, which has no compositor: it must fall back to window mode rather than fail. Hidden (by
+      # POWERRR_SMOKE, after 8 s), the page must hear it and keep the game going headless
       - name: smoke test (Linux)
         if: matrix.platform == 'linux'
         run: |
@@ -178,9 +184,11 @@ jobs:
           dpkg -s powerrr | grep -E '^(Version|Depends)'
           APP=$(ls release/*.AppImage)
           chmod +x "$APP"
+          export POWERRR_SMOKE=$PWD/smoke.log
           dbus-run-session -- xvfb-run -a sh -c "\"$APP\" --appimage-extract-and-run > run.log 2>&1 & sleep 20; kill -0 \$! && kill \$!" || { cat run.log; exit 1; }
-          cat run.log
+          cat run.log smoke.log
           grep -q 'no compositor' run.log
+          grep -q 'away=true ticking=true' smoke.log
 
       - uses: actions/upload-artifact@v4.6.2
         with:
