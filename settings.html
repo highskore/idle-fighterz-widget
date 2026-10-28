@@ -42,6 +42,7 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 .keys { display: flex; align-items: center; gap: 4px; }
 .keys .pill { padding: 3px 8px; color: var(--muted); }
 .row small.err { color: #c0392b; }
+.note { margin: 0; padding: 6px 0 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .quit { display: block; width: 100%; margin-top: 20px; padding: 9px; font: inherit; text-transform: lowercase; color: #fff; background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
 </style>
 </head>
@@ -61,7 +62,8 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <label class="row"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
 <label class="row"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
 <label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
-<div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
+<div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><small id="nokeys" hidden>not on wayland</small><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
+<p class="note" id="wlnote" hidden>wayland lets no app grab a key for itself. to show the widget from the keyboard, add a shortcut in your desktop's settings that runs <b id="wlcmd">powerrr</b>: opening it again brings the widget back.</p>
 <label class="row"><span>show power in <b id="bar">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
 <label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 
@@ -98,6 +100,8 @@ function render(v) {
   $('bar').textContent = MAC ? 'menu bar' : 'tray';
   // no compositor (Linux): the window can't be see-through, so floating isn't on offer
   document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
+  // wayland has no global shortcut (main.rs): the key picker gives way to a hint
+  $('nokeys').hidden = $('wlnote').hidden = !s.wayland; $('key').hidden = !!s.wayland; $('wlcmd').textContent = s.name.toLowerCase();
   $('quit').textContent = 'quit ' + s.name.toLowerCase();
 }
 document.querySelectorAll('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
@@ -123,7 +127,7 @@ let MAC = true;
 const keyName = p => MAC ? SYM[p] || p : p === 'Cmd' ? 'Super' : p;
 const keyText = sc => sc ? sc.split('+').map(p => keyName(p).replace(/^(Key|Digit)/, '').replace(/^Arrow/, '')).join(MAC ? '' : '+') : 'none';
 let recording = false;
-function showKey() { recording = false; $('key').classList.remove('rec'); $('key').textContent = keyText(s.shortcut); $('nokey').hidden = !s.shortcut; }
+function showKey() { recording = false; $('key').classList.remove('rec'); $('key').textContent = keyText(s.shortcut); $('nokey').hidden = !s.shortcut || !!s.wayland; }
 function setKey(sc) { $('keyerr').textContent = ''; set({ shortcut: sc }).catch(() => { $('keyerr').textContent = 'taken'; showKey(); }); }
 $('key').addEventListener('click', () => { recording = true; $('key').classList.add('rec'); $('key').textContent = 'press keys…'; $('keyerr').textContent = ''; });
 $('key').addEventListener('blur', () => recording && showKey());
