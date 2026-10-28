@@ -30,6 +30,7 @@ input:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outl
 .seg button.on { color: var(--ink); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
 input[type="range"] { width: 130px; accent-color: var(--gold); }
 input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
 .times { display: flex; gap: 6px; align-items: center; }
 .times[aria-disabled="true"] { opacity: .4; pointer-events: none; }
 .pill { font: inherit; text-transform: lowercase; padding: 3px 10px; color: var(--ink); background: #efefec; border: 0; border-radius: 999px; cursor: pointer; }
@@ -54,7 +55,7 @@ input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--li
 <div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
 <div class="row"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
 <div class="row"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
-<div class="row"><span>cloud shape</span><div class="seg" data-seg="cloud_shape"><button data-v="a">bank</button><button data-v="b">halo</button><button data-v="c">puffs</button><button data-v="d">plate</button></div></div>
+<label class="row"><span>cloud shape</span><select data-sel="cloud_shape"><option value="e">dock clouds</option><option value="c">drifting puffs</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
 <label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
 <div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
 <label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
@@ -84,9 +85,11 @@ function render(v) {
   document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg]) === b.dataset.v)));
   $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
   $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));
+  document.querySelectorAll('[data-sel]').forEach(e => { e.value = s[e.dataset.sel]; });
   if (!recording) showKey();
   $('quit').textContent = 'quit ' + s.name.toLowerCase();
 }
+document.querySelectorAll('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
 document.querySelectorAll('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
 document.querySelectorAll('[data-n]').forEach(i => i.addEventListener('change', () => { set({ notify: { [i.dataset.n]: i.checked } }); if (i.checked && perm === 'ask') invoke('request_notify_permission'); }));
 
