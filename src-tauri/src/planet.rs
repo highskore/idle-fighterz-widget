@@ -26,6 +26,8 @@ const MAX_DEPTH: usize = 32;
 pub struct Core {
     bridge: Mutex<Bridge>,
     file: PathBuf,
+    // true once the app is exiting: held across every write, so the exit save is the last one and none interleave
+    stopped: Mutex<bool>,
     /// the pointer is over the widget: frames go out at the hovered rate
     pub hovered: AtomicBool,
 }
@@ -37,7 +39,7 @@ impl Core {
         if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
-        Core { bridge: Mutex::new(bridge), file, hovered: AtomicBool::new(false) }
+        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), hovered: AtomicBool::new(false) }
     }
 
     // only in debug builds does a panic in the game fail just the one call: release builds have panic = "abort", so
@@ -60,10 +62,35 @@ impl Core {
         (msg != EMPTY).then_some(msg)
     }
 
+    /// Saves, unless the app is exiting (then `stop` has saved for the last time).
     pub fn save(&self) {
+        let stopped = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        if !*stopped {
+            self.write();
+        }
+    }
+
+    /// Stops the tick thread's saves and saves once more, on exit.
+    pub fn stop(&self) {
+        let mut stopped = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        if !*stopped {
+            *stopped = true;
+            self.write();
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        *self.stopped.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // to a temp file renamed into place, so a crash or a full disk mid-write leaves the old save whole
+    fn write(&self) {
         let Ok(text) = self.with(|b| b.game.save_json()) else { return };
         let _ = fs::create_dir_all(self.file.parent().unwrap());
-        let _ = fs::write(&self.file, text);
+        let tmp = self.file.with_extension("json.tmp");
+        if fs::write(&tmp, text).is_err() || fs::rename(&tmp, &self.file).is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
     }
 }
 
@@ -115,9 +142,10 @@ pub fn run(app: AppHandle, idle_fps: fn(&AppHandle) -> f64) {
         let (mut last, mut saved, mut checked) = (Instant::now(), Instant::now(), Instant::now());
         let mut visible = true;
         loop {
-
+            if core.stopped() {
+                return;
+            }
             if checked.elapsed() >= Duration::from_millis(250) {
-
                 checked = Instant::now();
                 visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(true);
             }
@@ -474,6 +502,20 @@ mod tests {
         let _ = fs::remove_file(f);
     }
 
+    #[test]
+    fn the_save_is_replaced_whole_and_not_after_exit() {
+        let f = file("atomic");
+        let core = Core::new(SEED, f.clone());
+        core.with(|b| b.start("Wed Oct 28 2026", 1.7e12)).unwrap();
+        core.save();
+        assert!(f.exists() && !f.with_extension("json.tmp").exists());
+        core.stop();
+        let last = fs::read_to_string(&f).unwrap();
+        core.tick(5.0, 1.7e12 + 5000.0);
+        core.save();
+        assert_eq!(fs::read_to_string(&f).unwrap(), last, "saved after the exit save");
+        let _ = fs::remove_file(f);
+    }
 
     #[test]
     fn only_a_small_regular_file_is_read() {

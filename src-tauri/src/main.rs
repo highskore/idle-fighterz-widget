@@ -372,7 +372,7 @@ fn main() {
             }
             #[cfg(feature = "rust-core")]
             if let tauri::RunEvent::Exit = e {
-                app.state::<planet::Core>().save();
+                app.state::<planet::Core>().stop(); // the tick thread saves no more after this
             }
             let _ = (app, e);
         });
