@@ -114,6 +114,12 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         let _ = if on { auto.enable() } else { auto.disable() };
     }
     apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
+    // only a new pick: on Linux every check is a D-Bus call, and a slider drag sends a burst of updates
+    if settings.get("tray_icon").is_some() {
+        if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
+            let _ = nudge.send(());
+        }
+    }
     let _ = app.emit("settings", with_login(&app, s));
     Ok(())
 }
@@ -163,9 +169,6 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
             let _ = item.set_checked(k == size);
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
-    }
-    if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
-        let _ = nudge.send(());
     }
     show_power(app, s);
 }
