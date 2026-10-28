@@ -23,8 +23,9 @@ KEY=$(sed -n 2p "$T/key/k.pub")
 OTHER=$(sed -n 2p "$T/other/k.pub")
 sign() { "$MINISIGN" -S -l -s "$T/key/k.key" -m "$1" -t "powerrr test $(basename "$1")" >/dev/null; }   # as release.yml does
 
-# the installer with the throwaway key in place of the real one, and without its last line (main "$@") to source it
-with_key() { sed "s|^MINISIGN_PUBKEY=.*|MINISIGN_PUBKEY='$1'|" "$ROOT/packaging/install.sh"; }
+# the installer with the throwaway key in place of the real one (and $LEGACY as its pinned unsigned releases), and
+# without its last line (main "$@") to source it
+with_key() { sed -e "s|^MINISIGN_PUBKEY=.*|MINISIGN_PUBKEY='$1'|" -e "s|^LEGACY_SUMS=.*|LEGACY_SUMS='${LEGACY:-}'|" "$ROOT/packaging/install.sh"; }
 with_key "$KEY" | sed '$d' > "$T/lib.sh"
 grep -q "^MINISIGN_PUBKEY='$KEY'" "$T/lib.sh" || fail "couldn't set the test key"
 # the real key, as shipped: a legacy-capable Ed25519 minisign key (42 bytes: "Ed", key id, key)
@@ -80,17 +81,23 @@ mkdir -p "$SRV"
 NAME=$(basename "$PKG")
 cp "$PKG" "$SRV/"
 # one folder per release, each with its SHA256SUMS (and SHA256SUMS.minisig)
-mkdir -p "$SRV/unsigned" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad"
+mkdir -p "$SRV/unsigned" "$SRV/unsigned-new" "$SRV/legacy-changed" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad"
 (cd "$SRV" && shasum -a 256 "$NAME" > unsigned/SHA256SUMS)
+# ci-unsigned stands for a release from before signing (pinned in the installer); ci-unsigned-new for a later one whose
+# .minisig was deleted; legacy-changed is ci-unsigned with its SHA256SUMS swapped
+LEGACY="ci-unsigned=$(shasum -a 256 "$SRV/unsigned/SHA256SUMS" | cut -d ' ' -f 1)"
+cp "$SRV/unsigned/SHA256SUMS" "$SRV/unsigned-new/"
+printf '%064d  %s\n' 0 "$NAME" > "$SRV/legacy-changed/SHA256SUMS"
 cp "$SRV/unsigned/SHA256SUMS" "$SRV/signed/" && sign "$SRV/signed/SHA256SUMS"
 cp "$SRV/signed/SHA256SUMS" "$SRV/signed/SHA256SUMS.minisig" "$SRV/tampered/" && printf '%064d  extra\n' 0 >> "$SRV/tampered/SHA256SUMS"
 printf '%064d  %s\n' 0 "$NAME" > "$SRV/signed-bad/SHA256SUMS" && sign "$SRV/signed-bad/SHA256SUMS"   # signed, with a wrong hash
 PORT=8766
 URL=http://127.0.0.1:$PORT
-for r in unsigned signed tampered signed-bad; do
+for r in unsigned unsigned-new legacy-changed signed tampered signed-bad; do
+  tag=ci-$r; [ $r != legacy-changed ] || tag=ci-unsigned
   sig=; [ ! -f "$SRV/$r/SHA256SUMS.minisig" ] || sig=", {\"name\": \"SHA256SUMS.minisig\", \"browser_download_url\": \"$URL/$r/SHA256SUMS.minisig\"}"
-  printf '{"tag_name": "ci-%s", "assets": [{"name": "%s", "browser_download_url": "%s/%s"}, {"name": "SHA256SUMS", "browser_download_url": "%s/%s/SHA256SUMS"}%s]}\n' \
-    "$r" "$NAME" "$URL" "$NAME" "$URL" "$r" "$sig" > "$SRV/$r.json"
+  printf '{"tag_name": "%s", "assets": [{"name": "%s", "browser_download_url": "%s/%s"}, {"name": "SHA256SUMS", "browser_download_url": "%s/%s/SHA256SUMS"}%s]}\n' \
+    "$tag" "$NAME" "$URL" "$NAME" "$URL" "$r" "$sig" > "$SRV/$r.json"
 done
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$SRV" >/dev/null 2>&1 &
 SERVER=$!
@@ -110,8 +117,8 @@ run() {   # run <installer> <release>: its exit code, and everything it printed 
 installed() { if [ $KIND = mac ]; then ls -d "$T"/dest/*.app >/dev/null 2>&1; else [ -x "$T/dest/powerrr" ]; fi; }
 
 run "$T/install.sh" unsigned
-[ $code = 0 ] && installed && grep -q 'unsigned checksums' "$T/out" || fail "an unsigned release didn't install with the unsigned checksums note"
-ok "an unsigned release installs, with the note"
+[ $code = 0 ] && installed && grep -q 'unsigned checksums' "$T/out" || fail "a pinned unsigned release didn't install with the unsigned checksums note"
+ok "a release from before signing installs, with the note"
 if [ $KIND = linux ]; then
   [ -s "$T/home/share/icons/hicolor/128x128/apps/powerrr.png" ] || fail "no icon from the AppImage"
   ok "the menu icon comes from the AppImage"
@@ -120,6 +127,21 @@ fi
 run "$T/install.sh" signed
 [ $code = 0 ] && installed && grep -q 'SHA256SUMS signature ok' "$T/out" || fail "a signed release didn't install"
 ok "a signed release installs"
+
+if [ $KIND = mac ]; then
+  sed "s|^APPLE_TEAM_ID=.*|APPLE_TEAM_ID='ABCDE12345'|" "$T/install.sh" > "$T/install-team.sh"
+  run "$T/install-team.sh" signed
+  [ $code != 0 ] && ! installed && grep -q "isn't signed with a Developer ID" "$T/out" || fail "an app without a Developer ID passed an installer with APPLE_TEAM_ID set"
+  ok "with APPLE_TEAM_ID set, an app without a Developer ID signature is refused"
+fi
+
+run "$T/install.sh" unsigned-new
+[ $code != 0 ] && ! installed && grep -q 'no SHA256SUMS.minisig' "$T/out" || fail "a release with its .minisig removed wasn't refused"
+ok "a later release without a .minisig is refused"
+
+run "$T/install.sh" legacy-changed
+[ $code != 0 ] && ! installed && grep -q "isn't the one it was released with" "$T/out" || fail "a changed SHA256SUMS on a pinned release wasn't refused"
+ok "a release from before signing with a changed SHA256SUMS is refused"
 
 run "$T/install.sh" tampered
 [ $code != 0 ] && ! installed && grep -q "doesn't verify" "$T/out" || fail "a tampered SHA256SUMS wasn't refused"

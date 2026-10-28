@@ -8,13 +8,16 @@
 #
 # A release's SHA256SUMS is signed with minisign (SHA256SUMS.minisig) by the release workflow. The signature is
 # checked with minisign if it's installed, else OpenSSL 3, else (macOS, whose openssl can't) JavaScriptCore through
-# osascript, so nothing needs installing. A signed release that doesn't verify is refused; an older, unsigned one
-# installs with a note. On macOS a Developer ID signed app must also pass codesign and Gatekeeper, from the team below.
+# osascript, so nothing needs installing. A signed release that doesn't verify is refused, and so is an unsigned one,
+# except the releases from before signing, listed below with their SHA256SUMS pinned. On macOS a Developer ID signed
+# app must also pass codesign and Gatekeeper, from the team below.
 # This file is served by highskore.com and kept as a copy in powerrr's packaging/install.sh: change both.
 set -eu
 
 # the minisign public key that signs SHA256SUMS (minisign.pub's second line)
 MINISIGN_PUBKEY='RWQsYREKR+Av/TIhq7yrFboAERzsd4eoUxepZrikLPg8/hrtXm7MvY1C'
+# the releases from before SHA256SUMS was signed, each with the sha256 of its SHA256SUMS: only these install unsigned
+LEGACY_SUMS='desktop-v0.1.1=dc73874f6220409f6b9443337c6a8f77b38713eb8e4ecb9530908eeaaf735ffd'
 # the Apple team ID of the Developer ID certificate that signs the macOS app; empty until builds are signed
 APPLE_TEAM_ID=''
 
@@ -24,6 +27,8 @@ b64d() { if command -v openssl >/dev/null 2>&1; then openssl base64 -d -A; else 
 hex() { od -An -v -tx1 | tr -d ' \n'; }
 size() { wc -c < "$1" | tr -d ' '; }
 cut_bytes() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null; }   # cut_bytes <file> <offset> <length>
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1; }
+legacy_sum() { for e in $LEGACY_SUMS; do [ "${e%%=*}" = "$1" ] && { echo "${e#*=}"; return 0; }; done; return 0; }
 
 # an OpenSSL 3 that can verify Ed25519 (macOS's own openssl is LibreSSL, which can't)
 openssl3() {
@@ -107,7 +112,8 @@ verify_sums() {
   fi
 }
 
-# fetch_sums <SHA256SUMS url> <SHA256SUMS.minisig url, or empty>: downloads SHA256SUMS to $TMP and checks its signature
+# fetch_sums <SHA256SUMS url> <SHA256SUMS.minisig url, or empty>: downloads SHA256SUMS to $TMP and checks its signature,
+# or for a release from before signing, that it's the SHA256SUMS that release was published with
 fetch_sums() {
   curl -fsSL "$1" -o "$TMP/SHA256SUMS"
   if [ -n "$2" ]; then
@@ -116,16 +122,23 @@ fetch_sums() {
     verify_sums "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" || die "the signature on SHA256SUMS doesn't verify: not installing"
     say "SHA256SUMS signature ok"
   else
-    say "note: unsigned checksums: this release has no SHA256SUMS.minisig, so its SHA256SUMS only catches a broken download, not a tampered release"
+    # without this, deleting the .minisig would turn any release back into an unsigned one
+    pinned=$(legacy_sum "$TAG")
+    [ -n "$pinned" ] || die "release $TAG has no SHA256SUMS.minisig, though releases are signed: not installing"
+    [ "$(sha256 "$TMP/SHA256SUMS")" = "$pinned" ] || die "SHA256SUMS of $TAG isn't the one it was released with: not installing"
+    say "note: unsigned checksums: $TAG is from before releases were signed; its SHA256SUMS matches the copy pinned in this installer"
   fi
 }
 
-# a Developer ID signed app must verify, come from APPLE_TEAM_ID and pass Gatekeeper (SIGNED=1); an ad-hoc signed or
-# unsigned one installs as before (SIGNED=0)
+# a Developer ID signed app must verify, come from APPLE_TEAM_ID and pass Gatekeeper (SIGNED=1). An ad-hoc signed or
+# unsigned one installs as before (SIGNED=0), until APPLE_TEAM_ID is set: from then on every build must be signed
 check_app() {
   SIGNED=0
   info=$(codesign -dvv "$1" 2>&1 || true)
-  case "$info" in *'Authority=Developer ID Application:'*) ;; *) return 0 ;; esac
+  case "$info" in
+    *'Authority=Developer ID Application:'*) ;;
+    *) [ -z "$APPLE_TEAM_ID" ] || die "the app isn't signed with a Developer ID (this installer expects team $APPLE_TEAM_ID): not installing"; return 0 ;;
+  esac
   codesign --verify --deep --strict "$1" >&2 || die "the app's code signature doesn't verify: not installing"
   team=$(printf '%s\n' "$info" | sed -n 's/^TeamIdentifier=//p')
   [ -n "$APPLE_TEAM_ID" ] || die "the app is signed by team $team, but this installer has no APPLE_TEAM_ID to check it against"
@@ -152,6 +165,8 @@ main() {
   curl -fsSL "$API" -o "$TMP/release.json" || die "couldn't reach GitHub"
   asset() { grep -o "\"browser_download_url\": *\"[^\"]*$1\"" "$TMP/release.json" | head -n 1 | sed 's/.*"\(https*:[^"]*\)"/\1/'; }
   SIG_URL=$(asset '/SHA256SUMS\.minisig')
+  TAG=$(grep -o '"tag_name": *"[^"]*"' "$TMP/release.json" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+  [ -n "$TAG" ] || die "the release has no tag name"
 
   if [ "$OS" = Linux ]; then
     IMG_URL=$(asset '_amd64\.AppImage')

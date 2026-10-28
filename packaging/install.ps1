@@ -6,8 +6,9 @@
 # It refuses to run elevated (the app would install for, and run as, the admin) unless POWERRR_ALLOW_ADMIN=1.
 #
 # A release's SHA256SUMS is signed with minisign (SHA256SUMS.minisig) by the release workflow, and checked here with
-# the Ed25519 verification below, so nothing needs installing. A signed release that doesn't verify is refused; an
-# older, unsigned one installs with a note. Once builds are Authenticode-signed, the publisher below is checked too.
+# the Ed25519 verification below, so nothing needs installing. A signed release that doesn't verify is refused, and so
+# is an unsigned one, except the releases from before signing, listed below with their SHA256SUMS pinned. Once builds
+# are Authenticode-signed, the publisher below is checked too.
 # This file is served by highskore.com and kept as a copy in powerrr's packaging/install.ps1: change both.
 & {
   $ErrorActionPreference = 'Stop'
@@ -16,6 +17,8 @@
 
   # the minisign public key that signs SHA256SUMS (minisign.pub's second line)
   $MinisignPublicKey = 'RWQsYREKR+Av/TIhq7yrFboAERzsd4eoUxepZrikLPg8/hrtXm7MvY1C'
+  # the releases from before SHA256SUMS was signed, each with the sha256 of its SHA256SUMS: only these install unsigned
+  $LegacySums = @{ 'desktop-v0.1.1' = 'dc73874f6220409f6b9443337c6a8f77b38713eb8e4ecb9530908eeaaf735ffd' }
   # the Authenticode signer of the installer, once builds are signed: its certificate's thumbprint and/or subject
   # (e.g. 'CN=Your Name, O=Your Name, L=City, C=XX'). Empty: not checked
   $SignerThumbprint = ''
@@ -111,7 +114,11 @@
       if (-not $ok) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
       Write-Host 'SHA256SUMS signature ok'
     } else {
-      Write-Host 'note: unsigned checksums: this release has no SHA256SUMS.minisig, so its SHA256SUMS only catches a broken download, not a tampered release'
+      # without this, deleting the .minisig would turn any release back into an unsigned one
+      $tag = [string]$release.tag_name
+      if (-not $LegacySums.ContainsKey($tag)) { throw "install: release $tag has no SHA256SUMS.minisig, though releases are signed: not installing" }
+      if ((Get-FileHash "$tmp\SHA256SUMS" -Algorithm SHA256).Hash -ne $LegacySums[$tag]) { throw "install: SHA256SUMS of $tag isn't the one it was released with: not installing" }
+      Write-Host "note: unsigned checksums: $tag is from before releases were signed; its SHA256SUMS matches the copy pinned in this installer"
     }
     $want = Get-Content "$tmp\SHA256SUMS" |
       ForEach-Object { $h, $n = $_.Trim() -split '\s+\*?', 2; if ($n -eq $setup.name) { $h } } | Select-Object -First 1

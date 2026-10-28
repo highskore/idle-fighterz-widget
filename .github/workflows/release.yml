@@ -294,17 +294,10 @@ jobs:
           if ($LASTEXITCODE) { throw 'minisign -G failed' }
           $testKey = (Get-Content "$k\k.pub")[1]
 
-          # the installer as published, and copies with the test key, no key, and a required Authenticode signer
-          $src = Get-Content -Raw packaging\install.ps1
-          $real = [regex]::Match($src, "MinisignPublicKey = '([^']*)'").Groups[1].Value
-          if (-not $real) { throw "packaging/install.ps1 has no MinisignPublicKey" }
-          $src | Set-Content -Encoding ascii "$srv\install.ps1"
-          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = '$testKey'") | Set-Content -Encoding ascii "$srv\install-test.ps1"
-          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = ''") | Set-Content -Encoding ascii "$srv\install-nokey.ps1"
-          $src.Replace("SignerSubject = ''", "SignerSubject = 'CN=Nobody'") | Set-Content -Encoding ascii "$srv\install-signer.ps1"
-
           # the releases as GitHub's API describes them, each with a SHA256SUMS in sha256sum's format: right, wrong,
-          # signed with the test key, and signed then changed
+          # signed with the test key, and signed then changed. ci-good and ci-bad stand for releases from before
+          # signing, pinned in the installers below; ci-new is a later one whose .minisig was deleted, and ci-swapped
+          # is ci-good with another SHA256SUMS
           "$((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower())  $($setup.Name)" | Set-Content -Encoding ascii "$srv\SHA256SUMS"
           "$('0' * 64)  $($setup.Name)" | Set-Content -Encoding ascii "$srv\BADSUMS"
           Copy-Item "$srv\SHA256SUMS" "$srv\SIGNED"
@@ -312,11 +305,27 @@ jobs:
           if ($LASTEXITCODE) { throw 'minisign -S failed' }
           Copy-Item "$srv\SIGNED" "$srv\TAMPERED"
           Add-Content -Encoding ascii "$srv\TAMPERED" "$('0' * 64)  extra"
-          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'))) {
+          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('new', 'SHA256SUMS', ''), ('swapped', 'BADSUMS', '', 'good'), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'))) {
             $assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" })
             if ($r[2]) { $assets += @{ name = 'SHA256SUMS.minisig'; browser_download_url = "$url/$($r[2])" } }
-            @{ tag_name = "ci-$($r[0])"; assets = $assets } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
+            $tag = if ($r.Count -gt 3) { $r[3] } else { $r[0] }
+            @{ tag_name = "ci-$tag"; assets = $assets } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
           }
+
+          # the installer with its real key, and copies with the test key, no key, and a required Authenticode signer;
+          # all of them pin ci-good and ci-bad as releases from before signing
+          $src = Get-Content -Raw packaging\install.ps1
+          $real = [regex]::Match($src, "MinisignPublicKey = '([^']*)'").Groups[1].Value
+          if (-not $real) { throw "packaging/install.ps1 has no MinisignPublicKey" }
+          $legacy = [regex]::Match($src, '\$LegacySums = @\{[^}]*\}').Value
+          if (-not $legacy) { throw "packaging/install.ps1 has no LegacySums" }
+          $pins = "`$LegacySums = @{ 'ci-good' = '$((Get-FileHash "$srv\SHA256SUMS").Hash)'; 'ci-bad' = '$((Get-FileHash "$srv\BADSUMS").Hash)' }"
+          $src = $src.Replace($legacy, $pins)
+          $src | Set-Content -Encoding ascii "$srv\install.ps1"
+          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = '$testKey'") | Set-Content -Encoding ascii "$srv\install-test.ps1"
+          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = ''") | Set-Content -Encoding ascii "$srv\install-nokey.ps1"
+          $src.Replace("SignerSubject = ''", "SignerSubject = 'CN=Nobody'") | Set-Content -Encoding ascii "$srv\install-signer.ps1"
+
           # Vercel serves install.ps1 as application/octet-stream; so does this
           @'
           import functools, http.server, sys
@@ -362,12 +371,14 @@ jobs:
 
           '--- refusals: nothing is installed'
           Refused 'install.ps1' 'bad' 'sha256 mismatch' 'a wrong sha256'
+          Refused 'install.ps1' 'new' 'no SHA256SUMS.minisig' 'a later release without a .minisig'
+          Refused 'install.ps1' 'swapped' "isn't the one it was released with" 'a changed SHA256SUMS on a release from before signing'
           Refused 'install-test.ps1' 'tampered' "doesn't verify" 'a SHA256SUMS changed after signing'
           Refused 'install.ps1' 'signed' 'another key' 'a SHA256SUMS signed with another key'
           Refused 'install-nokey.ps1' 'signed' 'no key to check it with' 'a signed SHA256SUMS with no key in the installer'
           Refused 'install-signer.ps1' 'good' "isn't validly signed" 'an installer without the required Authenticode signer'
 
-          '--- an unsigned release installs and starts, with a note'
+          '--- a release from before signing installs and starts, with a note'
           $env:POWERRR_RELEASE = "$url/good.json"
           $r = Run-Install "irm $url/install.ps1 | iex"
           if ($r.code -ne 0) { throw "install.ps1 failed (exit $($r.code))" }
@@ -479,7 +490,8 @@ jobs:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
-          if [ -z "$MINISIGN_SECRET_KEY" ]; then echo "::warning::no MINISIGN_SECRET_KEY: SHA256SUMS goes out unsigned"; exit 0; fi
+          # the installers refuse a release without SHA256SUMS.minisig, so there's no releasing without the key
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then echo "::error::no MINISIGN_SECRET_KEY in the release environment: the installers would refuse this release"; exit 1; fi
           F=minisign-$MINISIGN_VERSION-linux.tar.gz
           curl -fsSL "https://github.com/jedisct1/minisign/releases/download/$MINISIGN_VERSION/$F" -o "$RUNNER_TEMP/$F"
           echo "$MINISIGN_LINUX_SHA256  $RUNNER_TEMP/$F" | sha256sum -c -
