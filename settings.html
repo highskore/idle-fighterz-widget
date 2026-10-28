@@ -42,6 +42,7 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 .keys { display: flex; align-items: center; gap: 4px; }
 .keys .pill { padding: 3px 8px; color: var(--muted); }
 .row small.err { color: #c0392b; }
+.row[hidden] { display: none; }
 .note { margin: 0; padding: 6px 0 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .quit { display: block; width: 100%; margin-top: 20px; padding: 9px; font: inherit; text-transform: lowercase; color: #fff; background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
 </style>
@@ -65,6 +66,7 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><small id="nokeys" hidden>not on wayland</small><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
 <p class="note" id="wlnote" hidden>wayland lets no app grab a key for itself. to show the widget from the keyboard, add a shortcut in your desktop's settings that runs <b id="wlcmd">powerrr</b>: opening it again brings the widget back.</p>
 <label class="row"><span>show power in <b id="bar">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
+<div class="row" id="trayrow" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
 <label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 
 <h2>notifications</h2>
@@ -98,6 +100,8 @@ function render(v) {
   if (!recording) showKey();
   $('os').textContent = MAC ? 'macos' : s.os === 'windows' ? 'windows' : 'system';
   $('bar').textContent = MAC ? 'menu bar' : 'tray';
+  // macOS tints its template icon itself; Windows and Linux pick white or black (auto follows the taskbar)
+  $('trayrow').hidden = MAC;
   // no compositor (Linux): the window can't be see-through, so floating isn't on offer
   document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
   // wayland has no global shortcut (main.rs): the key picker gives way to a hint
