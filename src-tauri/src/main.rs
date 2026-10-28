@@ -21,7 +21,7 @@ mod notes;
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating",
+  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "shortcut": "Alt+Cmd+KeyP"
@@ -38,6 +38,7 @@ struct State {
     settings: Mutex<Value>,
     file: PathBuf,
     tray: Mutex<Option<Tray>>,
+    power: Mutex<String>, // the power level as the widget last sent it, for the menu-bar title
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -136,6 +137,23 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
     }
+    show_power(app, s);
+}
+
+// the power level beside the menu-bar icon, or the icon alone when that's turned off
+fn show_power(app: &AppHandle, s: &Value) {
+    let Some(tray) = app.tray_by_id("tray") else { return };
+    let power = app.state::<State>().power.lock().unwrap().clone();
+    let on = s["menubar_power"].as_bool().unwrap_or(true) && !power.is_empty();
+    let _ = tray.set_title(on.then_some(power));
+}
+
+#[tauri::command]
+fn tray_title(app: AppHandle, text: String) {
+    let state = app.state::<State>();
+    *state.power.lock().unwrap() = text;
+    let s = state.settings.lock().unwrap().clone();
+    show_power(&app, &s);
 }
 
 fn show_widget(app: &AppHandle, show: bool) {
@@ -159,7 +177,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     }
     let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("settings")
-        .inner_size(380.0, 848.0)
+        .inner_size(380.0, 883.0)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(true)
         .shadow(true)
@@ -219,7 +237,7 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     let app = app.plugin(tauri_plugin_notification::init());
     app.invoke_handler(tauri::generate_handler![
-        get_settings, set_settings, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings
+        get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings
     ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -233,7 +251,7 @@ fn main() {
                 settings["layout"] = json!(7); // layouts 4 and 5 were dropped
             }
             let _ = app.get_webview_window("main").expect("main window").set_title(&app.package_info().name);
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None) });
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()) });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
             if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {

@@ -28,18 +28,32 @@ function ball(N = 32) {
   return { N, px }
 }
 
-// the menu-bar icon: a ball with a star punched out, black on clear so macOS tints it as a template image. drawn
-// smooth (8×8 samples a pixel) at 36px, which the tray shows at 18pt: sharp on retina, not blocky
-function tray(N = 36) {
-  const px = new Uint32Array(N * N), c = N / 2, r = 16
-  const pts = Array.from({ length: 10 }, (_, k) => { const a = -Math.PI / 2 + k * Math.PI / 5, q = k % 2 ? 3.4 : 8.4; return [c + Math.cos(a) * q, c + .6 + Math.sin(a) * q] })
-  const inStar = (x, y) => { let on = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, yi] = pts[i], [xj, yj] = pts[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) on = !on } return on }
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    let hit = 0
-    for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) { const sx = x + (i + .5) / 8, sy = y + (j + .5) / 8; if ((sx - c) ** 2 + (sy - c) ** 2 <= r * r && !inStar(sx, sy)) hit++ }
-    px[y * N + x] = Math.round(hit / 64 * 255)   // black, alpha only
-  }
-  return { N, px }
+// the menu-bar icon: a scouter, lens over the eye and the earpiece behind, as 18×18 pixel art doubled to 36px
+// (the tray shows it at 18pt). black on clear so macOS tints it as a template image; the glass is see-through
+const SCOUTER = [
+  '..................',
+  '..................',
+  '..................',
+  '..................',
+  '..............##..',
+  '...#########.####.',
+  '...#ggggggg#.####.',
+  '..#ggggggg#######.',
+  '..#ggggggg#######.',
+  '.#ggggggg#...####.',
+  '.#########...#..#.',
+  '.............#..#.',
+  '.............####.',
+  '..............##..',
+  '..................',
+  '..................',
+  '..................',
+  '..................',
+]
+function tray() {
+  const N = SCOUTER.length, px = new Uint32Array(N * N)
+  SCOUTER.forEach((row, y) => [...row].forEach((c, x) => { px[y * N + x] = c === '#' ? 0xff : c === 'g' ? 0x60 : 0 }))   // black, alpha only
+  return scale({ N, px }, 36)
 }
 
 const scale = ({ N, px }, S) => { const k = S / N, o = new Uint32Array(S * S); for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) o[y * S + x] = px[Math.floor(y / k) * N + Math.floor(x / k)]; return { N: S, px: o } }
