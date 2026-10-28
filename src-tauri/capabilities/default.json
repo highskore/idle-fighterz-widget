@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "the widget may drag its own window; both pages hear settings changes and call the app's own commands",
+  "windows": ["main", "settings"],
+  "permissions": ["core:window:allow-start-dragging", "core:event:allow-listen", "core:event:allow-unlisten"]
+}

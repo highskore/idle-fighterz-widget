@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>settings</title>
+<style>
+:root { --ink: #0b0b0b; --muted: #8d8d8d; --line: #ececec; --gold: #d99a1c; --bg: #fcfcfb; color-scheme: light; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: transparent; }
+/* no native title bar: a slim one of our own over a rounded card (the window itself is transparent) */
+.win { display: flex; flex-direction: column; height: 100%; background: var(--bg); border: 1px solid rgba(0,0,0,.12); border-radius: 12px; overflow: hidden; }
+.bar { flex: none; display: flex; align-items: center; justify-content: center; position: relative; height: 34px; border-bottom: 1px solid var(--line); background: #fff; }
+.bar span { color: var(--muted); text-transform: lowercase; letter-spacing: .02em; }
+.x { position: absolute; right: 8px; top: 6px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: var(--muted); background: none; border: 0; border-radius: 50%; cursor: pointer; }
+.x:hover { color: var(--ink); background: #efefec; }
+.x svg { width: 12px; height: 12px; }
+main { flex: 1; overflow: auto; padding: 4px 20px 20px; }
+body { color: var(--ink); font: 12px/1.5 ui-monospace, Menlo, monospace; -webkit-user-select: none; user-select: none; cursor: default; }
+h2 { margin: 18px 0 6px; color: var(--muted); font: inherit; text-transform: uppercase; letter-spacing: .04em; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; border-bottom: 1px solid var(--line); }
+.row span { text-transform: lowercase; }
+.row small { color: var(--muted); }
+input[type="checkbox"] { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: #dcdcd8; position: relative; transition: background .15s; cursor: pointer; flex: none; }
+input[type="checkbox"]::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+input[type="checkbox"]:checked { background: var(--gold); }
+input[type="checkbox"]:checked::after { transform: translateX(12px); }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.seg { display: flex; gap: 2px; padding: 2px; background: #efefec; border-radius: 8px; }
+.seg button { font: inherit; text-transform: lowercase; padding: 3px 9px; color: var(--muted); background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.seg button.on { color: var(--ink); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+input[type="range"] { width: 130px; accent-color: var(--gold); }
+input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.times { display: flex; gap: 6px; align-items: center; }
+.times[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+.quit { display: block; width: 100%; margin-top: 20px; padding: 9px; font: inherit; text-transform: lowercase; color: #fff; background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="win">
+<div class="bar" data-tauri-drag-region><span data-tauri-drag-region>settings</span><button type="button" class="x" id="close" aria-label="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>
+<main>
+
+<h2>widget</h2>
+<label class="row"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
+<div class="row"><span>size</span><div class="seg" data-seg="size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button></div></div>
+<div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
+<div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
+<label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
+<label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
+
+<h2>notifications</h2>
+<label class="row"><span>villain raids</span><input type="checkbox" data-n="raid"></label>
+<label class="row"><span>the dragon is summoned</span><input type="checkbox" data-n="shenron"></label>
+<label class="row"><span>trips to other worlds</span><input type="checkbox" data-n="trip"></label>
+<label class="row"><span>space pods</span><input type="checkbox" data-n="pod"></label>
+<label class="row"><span>ascend is available</span><input type="checkbox" data-n="ascend"></label>
+<label class="row"><span>quiet hours</span><input type="checkbox" id="quiet"></label>
+<div class="row"><span>quiet between</span><div class="times" id="times"><input type="time" id="from"><span>–</span><input type="time" id="to"></div></div>
+
+<button type="button" class="quit" id="quit">quit power planet</button>
+</main>
+</div>
+
+<script>
+const { invoke } = window.__TAURI__.core, $ = id => document.getElementById(id);
+const set = settings => invoke('set_settings', { settings });
+let s = {};
+function render(v) {
+  s = v;
+  document.querySelectorAll('[data-k]').forEach(i => { i.checked = !!s[i.dataset.k]; });
+  document.querySelectorAll('[data-n]').forEach(i => { i.checked = !!s.notify[i.dataset.n]; });
+  document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg]) === b.dataset.v)));
+  $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
+  $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));
+}
+document.querySelectorAll('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
+document.querySelectorAll('[data-n]').forEach(i => i.addEventListener('change', () => set({ notify: { [i.dataset.n]: i.checked } })));
+document.querySelectorAll('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const k = g.dataset.seg; set({ [k]: k === 'layout' ? +b.dataset.v : b.dataset.v }); }));
+$('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity').value + '%'; set({ opacity: $('opacity').value / 100 }); });
+$('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));
+for (const k of ['from', 'to']) $(k).addEventListener('change', () => set({ quiet: { [k]: $(k).value } }));
+$('quit').addEventListener('click', () => invoke('quit'));
+const close = () => window.__TAURI__.window.getCurrentWindow().close();
+$('close').addEventListener('click', close);
+addEventListener('keydown', e => { if (e.key === 'Escape' || (e.metaKey && e.key === 'w')) close(); });
+invoke('get_settings').then(render);
+window.__TAURI__.event.listen('settings', e => render(e.payload));
+</script>
+</body>
+</html>

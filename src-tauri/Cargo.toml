@@ -1,0 +1,23 @@
+[package]
+name = "power-planet"
+version = "0.1.0"
+description = "highskore's power planet as a desktop widget"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.1", features = ["tray-icon", "image-png", "macos-private-api"] }
+serde_json = "=1.0.154"
+tauri-plugin-autostart = "=2.6.0"
+tauri-plugin-notification = "=2.5.1"
+tauri-plugin-window-state = "=2.5.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
