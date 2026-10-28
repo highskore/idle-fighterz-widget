@@ -54,11 +54,16 @@ GAMES.push({
       call('key', { k });
     });
 
+    // the app steps the game at the rate widget.js picks (awake, the frame-rate setting; 0 while hidden)
+    let fps = st.fps;
+    Object.defineProperty(st, 'fps', { get: () => fps, set: v => { if (v !== fps) call('fps', { fps: fps = v }); }, configurable: true });
+
     const resize = () => { call('resize', { w: st.W, h: st.H, scale: st.scale }); solid(); };
     resize();
     call('resend');
     const blank = () => document.createElement('canvas');
     return {
+      native: true,
       menu: () => view.menu, angels: () => view.angels, ascendInfo: () => view.ascend_info, godInfo: () => view.god_info, zenoInfo: () => view.zeno_info,
       card: () => Object.assign({}, view.card, { spr: blank(), scene: blank() }),
       frame: () => {},

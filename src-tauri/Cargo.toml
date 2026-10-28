@@ -17,6 +17,8 @@ tauri-plugin-global-shortcut = "=2.4.1"
 tauri-plugin-window-state = "=2.5.0"
 # the game on the Rust core (feature rust-core), from the game submodule
 planet-core = { path = "../game/rust/planet-core", optional = true }
+# the hidden game's quiet hours, in local time (feature rust-core)
+chrono = { version = "=0.4.45", optional = true, default-features = false, features = ["clock"] }
 
 # macOS notifications go through UNUserNotificationCenter directly: it asks for permission and reports it
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -34,7 +36,7 @@ png = { version = "=0.18.1", optional = true }
 # off by default: the web view stays the renderer. On, a hidden setting picks the native one (see NATIVE.md); macOS only
 native-renderer = ["dep:objc2-core-foundation", "dep:objc2-core-graphics", "dep:objc2-quartz-core", "dep:png"]
 # off by default: game.js runs the game in the web view. On, planet-core runs it natively behind a HUD-only page (see NATIVE.md)
-rust-core = ["dep:planet-core"]
+rust-core = ["dep:planet-core", "dep:chrono"]
 
 [dev-dependencies]
 tauri = { version = "=2.12.1", features = ["test"] }
