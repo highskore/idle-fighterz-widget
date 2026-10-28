@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const read = f => readFileSync(join(root, f), 'utf8')
+const read = f => readFileSync(join(root, f), 'utf8').replace(/\r\n/g, '\n')   // as game/build.mjs: CRLF checkouts match too
 const fence = s => s.replace(/\/\*widget\*\/([\s\S]*?)\/\*\/widget\*\//g, '$1')   // as game/build.mjs --widget
 const page = read('dist/index.html'), game = read('game/shenron.js') + fence(read('game/game.js'))
 if (page.split(game).length !== 2) throw new Error('game.js not found once in dist/index.html: run npm run page first')
