@@ -194,6 +194,116 @@ jobs:
             release/*.deb
           if-no-files-found: error
 
+  # install.ps1 is served as https://highskore.com/install.ps1 from the highskore.com repo; packaging/install.ps1 is a
+  # copy. Here it runs as users run it (`irm … | iex` in Windows PowerShell 5.1): it must refuse a bad checksum,
+  # install this build from a stand-in for its GitHub release, reinstall over the running app, and uninstall cleanly.
+  # Then it runs against the real latest release
+  install-ps1:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: powerrr-windows
+          path: release
+
+      - name: the copy matches highskore.com
+        shell: bash
+        run: curl -fsSL https://highskore.com/install.ps1 | cmp - packaging/install.ps1 || echo "::warning::packaging/install.ps1 differs from https://highskore.com/install.ps1"
+
+      - name: install.ps1
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:LOCALAPPDATA\Powerrr"
+          $url = 'http://127.0.0.1:8765'
+          $srv = Join-Path $env:RUNNER_TEMP 'srv'
+          $null = New-Item -ItemType Directory $srv
+          $setup = Get-ChildItem release\*_x64-setup.exe | Select-Object -First 1
+          Copy-Item $setup.FullName, packaging\install.ps1 $srv
+          # the release as GitHub's API describes it, with a SHA256SUMS in sha256sum's format, and one with a wrong hash
+          "$((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower())  $($setup.Name)" | Set-Content -Encoding ascii "$srv\SHA256SUMS"
+          "$('0' * 64)  $($setup.Name)" | Set-Content -Encoding ascii "$srv\BADSUMS"
+          foreach ($r in @(('good', 'SHA256SUMS'), ('bad', 'BADSUMS'))) {
+            @{ tag_name = "ci-$($r[0])"; assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" }) } |
+              ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
+          }
+          # Vercel serves install.ps1 as application/octet-stream; so does this
+          @'
+          import functools, http.server, sys
+          H = http.server.SimpleHTTPRequestHandler
+          H.extensions_map = {'.ps1': 'application/octet-stream', '.json': 'application/json'}
+          http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(H, directory=sys.argv[1])).serve_forever()
+          '@ | Set-Content -Encoding ascii "$env:RUNNER_TEMP\serve.py"
+          $server = Start-Process python -ArgumentList "`"$env:RUNNER_TEMP\serve.py`"", "`"$srv`"" -PassThru -WindowStyle Hidden
+          for ($i = 0; ; $i++) { try { $null = Invoke-WebRequest "$url/good.json" -UseBasicParsing; break } catch { if ($i -gt 30) { throw } Start-Sleep 1 } }
+
+          # a fresh Windows PowerShell, as from the README; its exit code and everything it printed
+          function Run-Install($cmd) {
+            $ErrorActionPreference = 'Continue'
+            $out = powershell -NoProfile -Command $cmd 2>&1 | Out-String
+            Write-Host $out
+            @{ code = $LASTEXITCODE; out = $out }
+          }
+          function Registered { [bool](Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -eq 'Powerrr') }
+          function Uninstall {
+            Get-Process powerrr -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep 2
+            $un = Get-ChildItem "$dir\uninstall*.exe" | Select-Object -First 1
+            if (-not $un) { throw "no uninstaller in $dir" }
+            Start-Process $un.FullName -ArgumentList '/S' -Wait
+            # NSIS's uninstaller copies itself to %TEMP% and returns at once: wait for the files to go
+            for ($i = 0; $i -lt 60 -and (Test-Path "$dir\powerrr.exe"); $i++) { Start-Sleep 1 }
+            if (Test-Path "$dir\powerrr.exe") { throw 'the uninstaller left powerrr.exe' }
+            if (Registered) { throw 'the uninstaller left its entry in Apps' }
+            'uninstalled'
+          }
+
+          '--- a wrong sha256 is refused, and nothing is installed'
+          $env:POWERRR_RELEASE = "$url/bad.json"
+          $r = Run-Install "irm $url/install.ps1 | iex"
+          if ($r.code -eq 0 -or $r.out -notmatch 'sha256 mismatch') { throw "a wrong sha256 wasn't refused (exit $($r.code))" }
+          if (Test-Path "$dir\powerrr.exe") { throw 'installed despite the wrong sha256' }
+
+          '--- this build installs and starts'
+          $env:POWERRR_RELEASE = "$url/good.json"
+          $r = Run-Install "irm $url/install.ps1 | iex"
+          if ($r.code -ne 0) { throw "install.ps1 failed (exit $($r.code))" }
+          if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
+          if (-not (Registered)) { throw 'not in Apps' }
+          Start-Sleep 15
+          $first = @(Get-Process powerrr -ErrorAction SilentlyContinue)
+          if ($first.Count -ne 1) { throw "expected one powerrr running, found $($first.Count)" }
+
+          '--- installing again replaces the running app'
+          $r = Run-Install "irm $url/install.ps1 | iex"
+          if ($r.code -ne 0) { throw "reinstalling failed (exit $($r.code))" }
+          Start-Sleep 15
+          $now = @(Get-Process powerrr -ErrorAction SilentlyContinue)
+          if ($now.Count -ne 1 -or $now[0].Id -eq $first[0].Id) { throw "expected a new powerrr running, found $($now.Id -join ', ') (was $($first[0].Id))" }
+
+          '--- uninstall'
+          Uninstall
+          Stop-Process $server.Id
+
+          '--- the latest release'
+          Remove-Item Env:POWERRR_RELEASE
+          $env:POWERRR_REPO = $env:GITHUB_REPOSITORY
+          $latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" | ConvertFrom-Json
+          $r = Run-Install 'Get-Content -Raw packaging\install.ps1 | iex'
+          if ($latest.assets.name -like '*_x64-setup.exe') {
+            if ($r.code -ne 0) { throw "install.ps1 failed on $($latest.tag_name) (exit $($r.code))" }
+            if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
+            Uninstall
+          } else {
+            if ($r.code -eq 0 -or $r.out -notmatch 'has no Windows installer') { throw "expected install.ps1 to say $($latest.tag_name) has no Windows installer" }
+            "::notice::the latest release ($($latest.tag_name)) has no Windows installer: install.ps1 says so and stops"
+          }
+
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/desktop-v')

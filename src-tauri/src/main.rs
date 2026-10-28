@@ -40,6 +40,10 @@ struct Tray {
     top: CheckMenuItem<Wry>,
     sizes: Vec<CheckMenuItem<Wry>>,
     login: CheckMenuItem<Wry>,
+    #[cfg(target_os = "linux")]
+    menu: Menu<Wry>,
+    #[cfg(target_os = "linux")]
+    power: MenuItem<Wry>, // a greyed-out first item, in the menu only while the power level is shown
 }
 
 struct State {
@@ -48,6 +52,7 @@ struct State {
     tray: Mutex<Option<Tray>>,
     power: Mutex<String>, // the power level as the widget last sent it, for the menu-bar title
     transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
+    wayland: bool,        // no global shortcut and no pointer polling there
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -69,6 +74,7 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["os"] = json!(std::env::consts::OS);
     let transparent = app.state::<State>().transparent;
     s["transparent"] = json!(transparent);
+    s["wayland"] = json!(app.state::<State>().wayland);
     if !transparent {
         s["mode"] = json!("window");
     }
@@ -87,7 +93,7 @@ fn get_settings(app: AppHandle) -> Value {
 fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
     if let Some(new) = settings.get("shortcut").and_then(Value::as_str) {
         let old = app.state::<State>().settings.lock().unwrap()["shortcut"].as_str().unwrap_or("").to_string();
-        if new != old {
+        if new != old && !app.state::<State>().wayland {
             bind(&app, &old, new)?;
         }
     }
@@ -157,13 +163,30 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
 }
 
 // the power level beside the menu-bar icon, or the icon alone when that's turned off. Windows trays have no title, so
-// it goes in the tooltip; Linux trays have no tooltip, but an AppIndicator label beside the icon
+// it goes in the tooltip. Linux trays (AppIndicator) have no tooltip, and only some panels show its label beside the
+// icon (GNOME's AppIndicator extension does, KDE Plasma doesn't), so there it's also the menu's first item
 fn show_power(app: &AppHandle, s: &Value) {
     let Some(tray) = app.tray_by_id("tray") else { return };
     let power = app.state::<State>().power.lock().unwrap().clone();
     let on = s["menubar_power"].as_bool().unwrap_or(true) && !power.is_empty();
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let _ = tray.set_title(on.then_some(power));
+    #[cfg(target_os = "linux")]
+    {
+        let _ = tray.set_title(on.then_some(&power));
+        let items = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| (t.menu.clone(), t.power.clone()));
+        if let Some((menu, item)) = items {
+            let listed = menu.get(item.id()).is_some();
+            if on {
+                let _ = item.set_text(format!("Power {power}"));
+            }
+            if on && !listed {
+                let _ = menu.insert(&item, 0);
+            } else if !on && listed {
+                let _ = menu.remove(&item);
+            }
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         let name = &app.package_info().name;
@@ -295,11 +318,15 @@ fn main() {
             }
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
-            let transparent = can_be_transparent(&main);
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent });
+            let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
-            if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
+            // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
+            // bound at all, and settings says to use a desktop shortcut instead
+            if wayland {
+                eprintln!("wayland: no global show/hide shortcut");
+            } else if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
                 eprintln!("show/hide shortcut not bound: {e}");
             }
             #[cfg(target_os = "macos")]
@@ -313,7 +340,7 @@ fn main() {
                     app.state::<State>().settings.lock().unwrap()["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0)
                 });
             }
-            if !wayland(&main) {
+            if !wayland {
                 watch_pointer(app.handle().clone());
             }
             // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
@@ -446,6 +473,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    *app.state::<State>().tray.lock().unwrap() = Some(Tray { show, top, sizes, login });
+    *app.state::<State>().tray.lock().unwrap() = Some(Tray {
+        show,
+        top,
+        sizes,
+        login,
+        #[cfg(target_os = "linux")]
+        menu,
+        #[cfg(target_os = "linux")]
+        power: MenuItem::with_id(app, "power", "", false, none)?,
+    });
     Ok(())
 }
