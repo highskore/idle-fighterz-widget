@@ -35,6 +35,9 @@ const DEFAULTS: &str = r#"{
 #[cfg(not(target_os = "macos"))]
 const SHORTCUT: &str = "Ctrl+Alt+KeyP"; // Win+Alt+P / Super+Alt+P belong to the desktop; ⌥⌘P stays the macOS default
 
+// menu handles, cloned out of `State::tray` before any call on them: off the main thread a menu call waits for the main
+// thread, which may be waiting for that lock (on Linux the shortcut and second-launch callbacks run off it)
+#[derive(Clone)]
 struct Tray {
     show: MenuItem<Wry>,
     top: CheckMenuItem<Wry>,
@@ -153,7 +156,8 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let windowed = s["mode"] == "window" || !app.state::<State>().transparent;
     let _ = win.set_shadow(windowed);
     let _ = win.set_resizable(windowed);
-    if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
+    let tray = app.state::<State>().tray.lock().unwrap().clone();
+    if let Some(t) = tray {
         let _ = t.top.set_checked(on_top);
         for (k, item) in t.sizes.iter().enumerate() {
             let _ = item.set_checked(k == size);
@@ -209,8 +213,9 @@ fn tray_title(app: AppHandle, text: String) {
 fn show_widget(app: &AppHandle, show: bool) {
     let win = app.get_webview_window("main").expect("main window");
     let _ = if show { win.show() } else { win.hide() }; // hidden, the page gets no animation frames and stops drawing
-    if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
-        let _ = t.show.set_text(if show { "Hide Planet" } else { "Show Planet" });
+    let item = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.show.clone());
+    if let Some(item) = item {
+        let _ = item.set_text(if show { "Hide Planet" } else { "Show Planet" });
     }
 }
 
@@ -482,7 +487,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    *app.state::<State>().tray.lock().unwrap() = Some(Tray {
+    let tray = Tray {
         show,
         top,
         sizes,
@@ -491,7 +496,8 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         menu,
         #[cfg(target_os = "linux")]
         power: MenuItem::with_id(app, "power", "", false, none)?,
-    });
+    };
+    *app.state::<State>().tray.lock().unwrap() = Some(tray);
     Ok(())
 }
 
