@@ -303,6 +303,7 @@ jobs:
             if ($r.code -eq 0 -or $r.out -notmatch 'has no Windows installer') { throw "expected install.ps1 to say $($latest.tag_name) has no Windows installer" }
             "::notice::the latest release ($($latest.tag_name)) has no Windows installer: install.ps1 says so and stops"
           }
+          exit 0 # the step would otherwise end with the last install.ps1 run's exit code
 
   release:
     needs: build
