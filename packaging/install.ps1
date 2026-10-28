@@ -112,7 +112,11 @@
       Invoke-WebRequest $minisig.browser_download_url -OutFile "$tmp\SHA256SUMS.minisig" -UseBasicParsing
       $ok = Test-Minisign ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS")) ([IO.File]::ReadAllText("$tmp\SHA256SUMS.minisig")) $MinisignPublicKey
       if (-not $ok) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
-      Write-Host 'SHA256SUMS signature ok'
+      # the (signed) trusted comment names the release it was made for: an older release's SHA256SUMS and signature,
+      # served as a newer one, are refused
+      $comment = ((Get-Content "$tmp\SHA256SUMS.minisig")[2]).TrimEnd("`r")
+      if ($comment -cne "trusted comment: powerrr $($release.tag_name)") { throw "install: SHA256SUMS was signed for '$($comment -replace '^trusted comment: ')', not 'powerrr $($release.tag_name)': not installing" }
+      Write-Host "SHA256SUMS signature ok ($($release.tag_name))"
     } else {
       # without this, deleting the .minisig would turn any release back into an unsigned one
       $tag = [string]$release.tag_name

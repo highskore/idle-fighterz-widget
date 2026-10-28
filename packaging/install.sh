@@ -120,7 +120,11 @@ fetch_sums() {
     [ -n "$MINISIGN_PUBKEY" ] || die "this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing"
     curl -fsSL "$2" -o "$TMP/SHA256SUMS.minisig"
     verify_sums "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" || die "the signature on SHA256SUMS doesn't verify: not installing"
-    say "SHA256SUMS signature ok"
+    # the (signed) trusted comment names the release it was made for: an older release's SHA256SUMS and signature,
+    # served as a newer one, are refused
+    comment=$(sed -n 3p "$TMP/SHA256SUMS.minisig")
+    [ "$comment" = "trusted comment: powerrr $TAG" ] || die "SHA256SUMS was signed for '${comment#trusted comment: }', not 'powerrr $TAG': not installing"
+    say "SHA256SUMS signature ok ($TAG)"
   else
     # without this, deleting the .minisig would turn any release back into an unsigned one
     pinned=$(legacy_sum "$TAG")

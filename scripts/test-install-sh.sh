@@ -21,7 +21,7 @@ mkdir -p "$T/key" "$T/other" "$T/bin"
 "$MINISIGN" -G -W -p "$T/other/k.pub" -s "$T/other/k.key" >/dev/null
 KEY=$(sed -n 2p "$T/key/k.pub")
 OTHER=$(sed -n 2p "$T/other/k.pub")
-sign() { "$MINISIGN" -S -l -s "$T/key/k.key" -m "$1" -t "powerrr test $(basename "$1")" >/dev/null; }   # as release.yml does
+sign() { "$MINISIGN" -S -l -s "$T/key/k.key" -m "$1" -t "${2:-powerrr test}" >/dev/null; }   # sign <file> [trusted comment], as release.yml does
 
 # the installer with the throwaway key in place of the real one (and $LEGACY as its pinned unsigned releases), and
 # without its last line (main "$@") to source it
@@ -81,19 +81,20 @@ mkdir -p "$SRV"
 NAME=$(basename "$PKG")
 cp "$PKG" "$SRV/"
 # one folder per release, each with its SHA256SUMS (and SHA256SUMS.minisig)
-mkdir -p "$SRV/unsigned" "$SRV/unsigned-new" "$SRV/legacy-changed" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad"
+mkdir -p "$SRV/unsigned" "$SRV/unsigned-new" "$SRV/legacy-changed" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad" "$SRV/replay"
 (cd "$SRV" && shasum -a 256 "$NAME" > unsigned/SHA256SUMS)
 # ci-unsigned stands for a release from before signing (pinned in the installer); ci-unsigned-new for a later one whose
 # .minisig was deleted; legacy-changed is ci-unsigned with its SHA256SUMS swapped
 LEGACY="ci-unsigned=$(shasum -a 256 "$SRV/unsigned/SHA256SUMS" | cut -d ' ' -f 1)"
 cp "$SRV/unsigned/SHA256SUMS" "$SRV/unsigned-new/"
 printf '%064d  %s\n' 0 "$NAME" > "$SRV/legacy-changed/SHA256SUMS"
-cp "$SRV/unsigned/SHA256SUMS" "$SRV/signed/" && sign "$SRV/signed/SHA256SUMS"
+cp "$SRV/unsigned/SHA256SUMS" "$SRV/signed/" && sign "$SRV/signed/SHA256SUMS" 'powerrr ci-signed'
 cp "$SRV/signed/SHA256SUMS" "$SRV/signed/SHA256SUMS.minisig" "$SRV/tampered/" && printf '%064d  extra\n' 0 >> "$SRV/tampered/SHA256SUMS"
-printf '%064d  %s\n' 0 "$NAME" > "$SRV/signed-bad/SHA256SUMS" && sign "$SRV/signed-bad/SHA256SUMS"   # signed, with a wrong hash
+cp "$SRV/signed/SHA256SUMS" "$SRV/signed/SHA256SUMS.minisig" "$SRV/replay/"   # ci-signed's, served as ci-replay
+printf '%064d  %s\n' 0 "$NAME" > "$SRV/signed-bad/SHA256SUMS" && sign "$SRV/signed-bad/SHA256SUMS" 'powerrr ci-signed-bad'   # a wrong hash
 PORT=8766
 URL=http://127.0.0.1:$PORT
-for r in unsigned unsigned-new legacy-changed signed tampered signed-bad; do
+for r in unsigned unsigned-new legacy-changed signed tampered signed-bad replay; do
   tag=ci-$r; [ $r != legacy-changed ] || tag=ci-unsigned
   sig=; [ ! -f "$SRV/$r/SHA256SUMS.minisig" ] || sig=", {\"name\": \"SHA256SUMS.minisig\", \"browser_download_url\": \"$URL/$r/SHA256SUMS.minisig\"}"
   printf '{"tag_name": "%s", "assets": [{"name": "%s", "browser_download_url": "%s/%s"}, {"name": "SHA256SUMS", "browser_download_url": "%s/%s/SHA256SUMS"}%s]}\n' \
@@ -142,6 +143,10 @@ ok "a later release without a .minisig is refused"
 run "$T/install.sh" legacy-changed
 [ $code != 0 ] && ! installed && grep -q "isn't the one it was released with" "$T/out" || fail "a changed SHA256SUMS on a pinned release wasn't refused"
 ok "a release from before signing with a changed SHA256SUMS is refused"
+
+run "$T/install.sh" replay
+[ $code != 0 ] && ! installed && grep -q "was signed for 'powerrr ci-signed', not 'powerrr ci-replay'" "$T/out" || fail "another release's signed SHA256SUMS wasn't refused"
+ok "another release's signed SHA256SUMS is refused"
 
 run "$T/install.sh" tampered
 [ $code != 0 ] && ! installed && grep -q "doesn't verify" "$T/out" || fail "a tampered SHA256SUMS wasn't refused"
