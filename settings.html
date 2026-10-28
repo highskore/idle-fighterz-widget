@@ -55,6 +55,7 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <div class="row"><span>size</span><div class="seg" data-seg="size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button></div></div>
 <div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
 <div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
+<div class="row"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
 <div class="row"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
 <div class="row"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
 <label class="row"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
@@ -135,7 +136,7 @@ addEventListener('keydown', e => {
   if (!(e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.code))) { $('keyerr').textContent = MAC ? 'add ⌘, ⌃ or ⌥' : 'add ctrl or alt'; return; }
   recording = false; setKey([...MODS.filter(([m]) => e[m]).map(([, k]) => k), e.code].join('+'));
 }, true);
-document.querySelectorAll('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const k = g.dataset.seg; set({ [k]: k === 'layout' ? +b.dataset.v : b.dataset.v }); }));
+document.querySelectorAll('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const k = g.dataset.seg; set({ [k]: k === 'layout' || k === 'fps' ? +b.dataset.v : b.dataset.v }); }));
 $('camt').addEventListener('input', () => { $('cav').textContent = $('camt').value; set({ cloud_amount: +$('camt').value }); });
 $('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity').value + '%'; set({ opacity: $('opacity').value / 100 }); });
 $('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));
