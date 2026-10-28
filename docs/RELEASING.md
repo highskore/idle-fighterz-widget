@@ -88,7 +88,7 @@ The installers are served from the highskore.com repo as `https://highskore.com/
 curl -fsSL https://highskore.com/install.sh | sh
 ```
 
-On macOS it fetches the latest release of `highskore/powerrr`, checks the zip against `SHA256SUMS`, copies the app to `/Applications` (or `~/Applications`) and opens it. curl doesn't quarantine what it downloads, so even a build that isn't notarized opens; it says so, and that a browser download of such a build needs right-click → Open. On Linux it checks the AppImage the same way and installs it as `~/.local/bin/powerrr`, with a menu entry and icon. `install.ps1` checks the `-setup.exe` and runs it silently (per user, no admin).
+On macOS it fetches the latest release of `highskore/powerrr`, checks the zip against `SHA256SUMS`, copies the app to `/Applications` (or `~/Applications`) and opens it. curl doesn't quarantine what it downloads, so even a build that isn't notarized opens; it says so, and that a browser download of such a build needs right-click → Open. On Linux it checks the AppImage the same way and installs it as `~/.local/bin/powerrr`, with a menu entry and icon. `install.ps1` checks the `-setup.exe` and runs it silently (per user, no admin). `packaging/install.ps1` is a copy of it, which CI (the `install-ps1` job) runs in Windows PowerShell on every build: it must refuse a wrong checksum, install the build, reinstall over the running app and uninstall cleanly, then it runs against the latest release. CI warns when the copy and the site differ. `POWERRR_RELEASE`, a release's API URL, points it at a release other than the latest.
 
 ## First release, in order
 
