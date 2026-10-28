@@ -21,6 +21,15 @@ block2 = "=0.6.2"
 objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-user-notifications = "=0.3.2"
+# the native renderer (feature native-renderer): a CALayer showing a framebuffer, and the stand-in PNG frames
+objc2-core-foundation = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-graphics = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2", "CGColorSpace", "CGDataProvider", "CGImage"] }
+objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "CALayer", "CATransaction"] }
+png = { version = "=0.18.1", optional = true }
+
+[features]
+# off by default: the web view stays the renderer. On, a hidden setting picks the native one (see NATIVE.md); macOS only
+native-renderer = ["dep:objc2-core-foundation", "dep:objc2-core-graphics", "dep:objc2-quartz-core", "dep:png"]
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tauri-plugin-notification = "=2.5.1"
