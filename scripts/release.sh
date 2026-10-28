@@ -38,6 +38,8 @@ case "$TARGET" in
   *) rustup target add "$TARGET" >/dev/null ;;
 esac
 [ -d node_modules ] || npm ci --no-audit --no-fund
+# an empty secret still exports the variable in CI, and tauri then tries to import a certificate that isn't there
+for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do [ -n "${!v:-}" ] || unset "$v"; done
 npm run -s page
 # notarizing happens below, with notarytool, for the app and the dmg alike: keep tauri from doing it as well
 env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
