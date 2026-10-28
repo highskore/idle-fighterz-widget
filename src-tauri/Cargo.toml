@@ -39,6 +39,12 @@ tauri-plugin-single-instance = "=2.5.3"
 # the same gtk as tauri's, to ask the screen whether a compositor will draw the transparent window
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "=0.18.2"
+# the freedesktop settings portal's color scheme, for a tray icon that shows on the panel
+zbus = "=5.19.0"
+
+# the taskbar's light or dark theme, for the same
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "=0.56.0"
 
 [profile.release]
 codegen-units = 1

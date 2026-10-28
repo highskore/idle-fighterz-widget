@@ -29,7 +29,8 @@ function ball(N = 32) {
 }
 
 // the menu-bar icon: a scouter, lens over the eye and the earpiece behind, as 18×18 pixel art doubled to 36px
-// (the tray shows it at 18pt). black on clear so macOS tints it as a template image; the glass is see-through
+// (the tray shows it at 18pt). black on clear so macOS tints it as a template image; the glass is see-through. Windows and
+// Linux don't tint, so they get it black or white to match the taskbar
 const SCOUTER = [
   '..................',
   '..................',
@@ -50,9 +51,9 @@ const SCOUTER = [
   '..................',
   '..................',
 ]
-function tray() {
+function tray(rgb = 0) {
   const N = SCOUTER.length, px = new Uint32Array(N * N)
-  SCOUTER.forEach((row, y) => [...row].forEach((c, x) => { px[y * N + x] = c === '#' ? 0xff : c === 'g' ? 0x60 : 0 }))   // black, alpha only
+  SCOUTER.forEach((row, y) => [...row].forEach((c, x) => { px[y * N + x] = c === '#' ? (rgb << 8 | 0xff) >>> 0 : c === 'g' ? (rgb << 8 | 0x60) >>> 0 : 0 }))
   return scale({ N, px }, 36)
 }
 
@@ -89,4 +90,5 @@ for (const [name, s] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.p
 writeFileSync(join(out, 'icon.icns'), icns(icon))
 writeFileSync(join(out, 'icon.ico'), ico(icon))
 writeFileSync(join(out, 'tray.png'), png(tray()))
+writeFileSync(join(out, 'tray-white.png'), png(tray(0xffffff)))
 console.log('icons written to', out)

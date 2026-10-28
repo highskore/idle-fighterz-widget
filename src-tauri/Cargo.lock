@@ -2698,6 +2698,8 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "winreg 0.56.0",
+ "zbus",
 ]
 
 [[package]]

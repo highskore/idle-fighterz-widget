@@ -382,12 +382,17 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
 
-    // the scouter is a black template image that only macOS tints; on dark Windows and Linux panels it'd vanish, so the
-    // dragon ball goes there
+    // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
+    // match the taskbar, and follows it when the theme changes
     #[cfg(target_os = "macos")]
     let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     #[cfg(not(target_os = "macos"))]
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    let icon = {
+        let taskbar = Taskbar::new();
+        let dark = taskbar.dark();
+        watch_taskbar(app.clone(), taskbar, dark);
+        scouter(dark)?
+    };
     TrayIconBuilder::with_id("tray")
         .icon(icon)
         .icon_as_template(true)
@@ -424,4 +429,94 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
     *app.state::<State>().tray.lock().unwrap() = Some(Tray { show, top, sizes, login });
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn scouter(dark: bool) -> tauri::Result<Image<'static>> {
+    let png: &[u8] = if dark { include_bytes!("../icons/tray-white.png") } else { include_bytes!("../icons/tray.png") };
+    Image::from_bytes(png)
+}
+
+// checks the taskbar's theme every few seconds and swaps the scouter when it changes (cheap: a registry value, or one
+// D-Bus call; no event covers the Windows taskbar alone)
+#[cfg(not(target_os = "macos"))]
+fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut dark: bool) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let now = taskbar.dark();
+        if now != dark {
+            if let (Some(tray), Ok(icon)) = (app.tray_by_id("tray"), scouter(now)) {
+                if tray.set_icon(Some(icon)).is_ok() {
+                    dark = now;
+                }
+            }
+        }
+    });
+}
+
+// Windows keeps the taskbar's theme apart from the apps' (a dark taskbar with light apps is Windows 10's default)
+#[cfg(target_os = "windows")]
+struct Taskbar;
+#[cfg(target_os = "windows")]
+impl Taskbar {
+    fn new() -> Self {
+        Taskbar
+    }
+    fn dark(&self) -> bool {
+        use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+        let light = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            .and_then(|k| k.get_value::<u32, _>("SystemUsesLightTheme"));
+        light.unwrap_or(0) == 0 // no value: a Windows 10 from before light taskbars
+    }
+}
+
+// Linux: the freedesktop settings portal's color scheme, where there is one (live); else the GTK theme's name, read once
+// at startup on the main thread (GTK lives there). With no preference, white: most panels are dark (GNOME's top bar is)
+#[cfg(target_os = "linux")]
+struct Taskbar {
+    bus: Option<zbus::blocking::Connection>,
+    gtk_dark: Option<bool>,
+}
+#[cfg(target_os = "linux")]
+impl Taskbar {
+    fn new() -> Self {
+        use gtk::glib::object::ObjectExt;
+        let theme = gtk::Settings::default().and_then(|s| s.property::<Option<String>>("gtk-theme-name"));
+        Taskbar { bus: zbus::blocking::Connection::session().ok(), gtk_dark: theme.map(|t| t.to_lowercase().contains("dark")) }
+    }
+    fn dark(&self) -> bool {
+        match self.bus.as_ref().and_then(color_scheme) {
+            Some(2) => false, // prefers light
+            Some(_) => true,  // 1 prefers dark, 0 no preference
+            None => self.gtk_dark.unwrap_or(true),
+        }
+    }
+}
+
+// org.freedesktop.appearance color-scheme: ReadOne, or Read (older portals) which wraps it in one more variant
+#[cfg(target_os = "linux")]
+fn color_scheme(bus: &zbus::blocking::Connection) -> Option<u32> {
+    use zbus::zvariant::{OwnedValue, Value};
+    let read = |method: &str| -> Option<OwnedValue> {
+        let reply = bus
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.portal.Settings"),
+                method,
+                &("org.freedesktop.appearance", "color-scheme"),
+            )
+            .ok()?;
+        reply.body().deserialize::<OwnedValue>().ok()
+    };
+    let v = read("ReadOne").or_else(|| read("Read"))?;
+    match &*v {
+        Value::U32(n) => Some(*n),
+        Value::Value(inner) => match **inner {
+            Value::U32(n) => Some(n),
+            _ => None,
+        },
+        _ => None,
+    }
 }
