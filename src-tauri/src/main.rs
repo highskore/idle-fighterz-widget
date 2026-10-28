@@ -2,7 +2,7 @@
 // The power planet as a desktop pet: one frameless, transparent window showing the bundled page, a settings
 // window, and a menu-bar icon. Settings are app config in a JSON file; the game itself is never saved.
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf, sync::{mpsc::Sender, Mutex}};
 use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -27,7 +27,7 @@ mod planet;
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30,
+  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto",
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "shortcut": "Alt+Cmd+KeyP"
@@ -53,6 +53,7 @@ struct State {
     power: Mutex<String>, // the power level as the widget last sent it, for the menu-bar title
     transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
     wayland: bool,        // no global shortcut and no pointer polling there
+    tray_nudge: Mutex<Option<Sender<()>>>, // wakes the tray icon's watcher (Windows, Linux) when settings change
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -158,6 +159,9 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
             let _ = item.set_checked(k == size);
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
+    }
+    if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
+        let _ = nudge.send(());
     }
     show_power(app, s);
 }
@@ -319,7 +323,7 @@ fn main() {
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland });
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None) });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
             // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
@@ -434,15 +438,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
 
     // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
-    // match the taskbar, and follows it when the theme changes
+    // match the taskbar (or as picked in settings), and follows it when the theme changes
     #[cfg(target_os = "macos")]
     let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     #[cfg(not(target_os = "macos"))]
     let icon = {
         let taskbar = Taskbar::new();
-        let dark = taskbar.dark();
-        watch_taskbar(app.clone(), taskbar, dark);
-        scouter(dark)?
+        let white = white_scouter(app, &taskbar);
+        watch_taskbar(app.clone(), taskbar, white);
+        scouter(white)?
     };
     TrayIconBuilder::with_id("tray")
         .icon(icon)
@@ -492,22 +496,35 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn scouter(dark: bool) -> tauri::Result<Image<'static>> {
-    let png: &[u8] = if dark { include_bytes!("../icons/tray-white.png") } else { include_bytes!("../icons/tray.png") };
+fn scouter(white: bool) -> tauri::Result<Image<'static>> {
+    let png: &[u8] = if white { include_bytes!("../icons/tray-white.png") } else { include_bytes!("../icons/tray.png") };
     Image::from_bytes(png)
 }
 
-// checks the taskbar's theme every few seconds and swaps the scouter when it changes (cheap: a registry value, or one
-// D-Bus call; no event covers the Windows taskbar alone)
+// the tray icon setting: "light" is the white scouter (for dark taskbars), "dark" the black one, "auto" the taskbar's theme
 #[cfg(not(target_os = "macos"))]
-fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut dark: bool) {
+fn white_scouter(app: &AppHandle, taskbar: &Taskbar) -> bool {
+    let pick = app.state::<State>().settings.lock().unwrap()["tray_icon"].as_str().unwrap_or("auto").to_string();
+    match pick.as_str() {
+        "light" => true,
+        "dark" => false,
+        _ => taskbar.dark(),
+    }
+}
+
+// every few seconds, and at once when settings change, swaps the scouter if it should change. only "auto" asks the
+// system (cheap: a registry value, or one D-Bus call; no event covers the Windows taskbar alone)
+#[cfg(not(target_os = "macos"))]
+fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut white: bool) {
+    let (nudge, woken) = std::sync::mpsc::channel();
+    *app.state::<State>().tray_nudge.lock().unwrap() = Some(nudge);
     std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        let now = taskbar.dark();
-        if now != dark {
+        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
+        let now = white_scouter(&app, &taskbar);
+        if now != white {
             if let (Some(tray), Ok(icon)) = (app.tray_by_id("tray"), scouter(now)) {
                 if tray.set_icon(Some(icon)).is_ok() {
-                    dark = now;
+                    white = now;
                 }
             }
         }
