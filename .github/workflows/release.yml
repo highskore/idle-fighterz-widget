@@ -15,6 +15,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # minisign, to sign SHA256SUMS (release) and to test the installers' checks of it: pinned, and checked against
+  # these sha256s (the files' own minisign signatures, by jedisct1's key, verify too)
+  MINISIGN_VERSION: '0.12'
+  MINISIGN_LINUX_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+  MINISIGN_MACOS_SHA256: 89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63
+  MINISIGN_WIN64_SHA256: 37B600344E20C19314B2E82813DB2BFDCC408B77B876F7727889DBD46D539479
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -272,13 +280,42 @@ jobs:
           $srv = Join-Path $env:RUNNER_TEMP 'srv'
           $null = New-Item -ItemType Directory $srv
           $setup = Get-ChildItem release\*_x64-setup.exe | Select-Object -First 1
-          Copy-Item $setup.FullName, packaging\install.ps1 $srv
-          # the release as GitHub's API describes it, with a SHA256SUMS in sha256sum's format, and one with a wrong hash
+          Copy-Item $setup.FullName $srv
+
+          # minisign, pinned, to make a throwaway key and sign a stand-in SHA256SUMS with it (never a real key)
+          $zip = Join-Path $env:RUNNER_TEMP 'minisign.zip'
+          Invoke-WebRequest "https://github.com/jedisct1/minisign/releases/download/$env:MINISIGN_VERSION/minisign-$env:MINISIGN_VERSION-win64.zip" -OutFile $zip -UseBasicParsing
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:MINISIGN_WIN64_SHA256) { throw 'minisign download: sha256 mismatch' }
+          Expand-Archive $zip "$env:RUNNER_TEMP\minisign"
+          $ms = "$env:RUNNER_TEMP\minisign\minisign-win64\x86_64\minisign.exe"
+          $k = Join-Path $env:RUNNER_TEMP 'testkey'
+          $null = New-Item -ItemType Directory $k
+          & $ms -G -W -p "$k\k.pub" -s "$k\k.key"
+          if ($LASTEXITCODE) { throw 'minisign -G failed' }
+          $testKey = (Get-Content "$k\k.pub")[1]
+
+          # the installer as published, and copies with the test key, no key, and a required Authenticode signer
+          $src = Get-Content -Raw packaging\install.ps1
+          $real = [regex]::Match($src, "MinisignPublicKey = '([^']*)'").Groups[1].Value
+          if (-not $real) { throw "packaging/install.ps1 has no MinisignPublicKey" }
+          $src | Set-Content -Encoding ascii "$srv\install.ps1"
+          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = '$testKey'") | Set-Content -Encoding ascii "$srv\install-test.ps1"
+          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = ''") | Set-Content -Encoding ascii "$srv\install-nokey.ps1"
+          $src.Replace("SignerSubject = ''", "SignerSubject = 'CN=Nobody'") | Set-Content -Encoding ascii "$srv\install-signer.ps1"
+
+          # the releases as GitHub's API describes them, each with a SHA256SUMS in sha256sum's format: right, wrong,
+          # signed with the test key, and signed then changed
           "$((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower())  $($setup.Name)" | Set-Content -Encoding ascii "$srv\SHA256SUMS"
           "$('0' * 64)  $($setup.Name)" | Set-Content -Encoding ascii "$srv\BADSUMS"
-          foreach ($r in @(('good', 'SHA256SUMS'), ('bad', 'BADSUMS'))) {
-            @{ tag_name = "ci-$($r[0])"; assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" }) } |
-              ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
+          Copy-Item "$srv\SHA256SUMS" "$srv\SIGNED"
+          & $ms -S -l -s "$k\k.key" -m "$srv\SIGNED" -t 'powerrr ci SHA256SUMS'
+          if ($LASTEXITCODE) { throw 'minisign -S failed' }
+          Copy-Item "$srv\SIGNED" "$srv\TAMPERED"
+          Add-Content -Encoding ascii "$srv\TAMPERED" "$('0' * 64)  extra"
+          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'))) {
+            $assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" })
+            if ($r[2]) { $assets += @{ name = 'SHA256SUMS.minisig'; browser_download_url = "$url/$($r[2])" } }
+            @{ tag_name = "ci-$($r[0])"; assets = $assets } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
           }
           # Vercel serves install.ps1 as application/octet-stream; so does this
           @'
@@ -297,6 +334,13 @@ jobs:
             Write-Host $out
             @{ code = $LASTEXITCODE; out = $out }
           }
+          function Refused($script, $release, $why, $what) {
+            $env:POWERRR_RELEASE = "$url/$release.json"
+            $r = Run-Install "irm $url/$script | iex"
+            if ($r.code -eq 0 -or $r.out -notmatch $why) { throw "$what wasn't refused (exit $($r.code))" }
+            if (Test-Path "$dir\powerrr.exe") { throw "installed despite: $what" }
+            "ok: $what is refused"
+          }
           function Registered { [bool](Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -eq 'Powerrr') }
           function Uninstall {
             Get-Process powerrr -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -311,25 +355,34 @@ jobs:
             'uninstalled'
           }
 
-          '--- a wrong sha256 is refused, and nothing is installed'
-          $env:POWERRR_RELEASE = "$url/bad.json"
-          $r = Run-Install "irm $url/install.ps1 | iex"
-          if ($r.code -eq 0 -or $r.out -notmatch 'sha256 mismatch') { throw "a wrong sha256 wasn't refused (exit $($r.code))" }
-          if (Test-Path "$dir\powerrr.exe") { throw 'installed despite the wrong sha256' }
+          '--- an elevated shell is refused unless POWERRR_ALLOW_ADMIN=1 (the runner is elevated)'
+          $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          if ($admin) { Refused 'install.ps1' 'good' 'elevated' 'an elevated shell' } else { '::notice::the runner is not elevated: skipped the elevated-shell check' }
+          $env:POWERRR_ALLOW_ADMIN = '1'
 
-          '--- this build installs and starts'
+          '--- refusals: nothing is installed'
+          Refused 'install.ps1' 'bad' 'sha256 mismatch' 'a wrong sha256'
+          Refused 'install-test.ps1' 'tampered' "doesn't verify" 'a SHA256SUMS changed after signing'
+          Refused 'install.ps1' 'signed' 'another key' 'a SHA256SUMS signed with another key'
+          Refused 'install-nokey.ps1' 'signed' 'no key to check it with' 'a signed SHA256SUMS with no key in the installer'
+          Refused 'install-signer.ps1' 'good' "isn't validly signed" 'an installer without the required Authenticode signer'
+
+          '--- an unsigned release installs and starts, with a note'
           $env:POWERRR_RELEASE = "$url/good.json"
           $r = Run-Install "irm $url/install.ps1 | iex"
           if ($r.code -ne 0) { throw "install.ps1 failed (exit $($r.code))" }
+          if ($r.out -notmatch 'unsigned checksums') { throw 'no unsigned checksums note' }
           if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
           if (-not (Registered)) { throw 'not in Apps' }
           Start-Sleep 15
           $first = @(Get-Process powerrr -ErrorAction SilentlyContinue)
           if ($first.Count -ne 1) { throw "expected one powerrr running, found $($first.Count)" }
 
-          '--- installing again replaces the running app'
-          $r = Run-Install "irm $url/install.ps1 | iex"
+          '--- a signed release installs over the running app'
+          $env:POWERRR_RELEASE = "$url/signed.json"
+          $r = Run-Install "irm $url/install-test.ps1 | iex"
           if ($r.code -ne 0) { throw "reinstalling failed (exit $($r.code))" }
+          if ($r.out -notmatch 'SHA256SUMS signature ok') { throw 'the signature was not checked' }
           Start-Sleep 15
           $now = @(Get-Process powerrr -ErrorAction SilentlyContinue)
           if ($now.Count -ne 1 -or $now[0].Id -eq $first[0].Id) { throw "expected a new powerrr running, found $($now.Id -join ', ') (was $($first[0].Id))" }
@@ -352,8 +405,51 @@ jobs:
           }
           exit 0 # a PowerShell step ends with $LASTEXITCODE, which an expected install.ps1 failure may have left at 1
 
+  # install.sh is served as https://highskore.com/install.sh; packaging/install.sh is a copy. scripts/test-install-sh.sh
+  # checks its signature verifiers with a throwaway minisign key, then installs this build from a stand-in release:
+  # unsigned, signed, signed then changed, signed with another key or with none in the installer
+  install-sh:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, platform: macos, package: '*_universal.zip', minisign: macos.zip }
+          - { os: ubuntu-22.04, platform: linux, package: '*_amd64.AppImage', minisign: linux.tar.gz }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: powerrr-${{ matrix.platform }}
+          path: release
+
+      - name: the copy matches highskore.com
+        run: |
+          curl -fsSL https://highskore.com/install.sh | cmp - packaging/install.sh && exit 0
+          case "$GITHUB_REF" in
+            refs/tags/desktop-v*) echo "::error::packaging/install.sh differs from https://highskore.com/install.sh"; exit 1 ;;
+            *) echo "::warning::packaging/install.sh differs from https://highskore.com/install.sh" ;;
+          esac
+
+      - name: install.sh
+        run: |
+          F=minisign-$MINISIGN_VERSION-${{ matrix.minisign }}
+          curl -fsSL "https://github.com/jedisct1/minisign/releases/download/$MINISIGN_VERSION/$F" -o "$RUNNER_TEMP/$F"
+          case "${{ matrix.platform }}" in
+            macos) SHA=$MINISIGN_MACOS_SHA256; (cd "$RUNNER_TEMP" && unzip -q "$F" minisign) ; MS=$RUNNER_TEMP/minisign ;;
+            linux) SHA=$MINISIGN_LINUX_SHA256; tar -xzf "$RUNNER_TEMP/$F" -C "$RUNNER_TEMP"; MS=$RUNNER_TEMP/minisign-linux/x86_64/minisign ;;
+          esac
+          echo "$SHA  $RUNNER_TEMP/$F" | shasum -a 256 -c -
+          chmod +x "$MS"
+          chmod +x release/${{ matrix.package }}
+          sh scripts/test-install-sh.sh "$MS" release/${{ matrix.package }}
+
   release:
-    needs: [build, install-ps1]
+    needs: [build, install-ps1, install-sh]
     if: startsWith(github.ref, 'refs/tags/desktop-v')
     runs-on: ubuntu-latest
     environment: release
@@ -369,6 +465,40 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: SHA256SUMS
+        run: |
+          cd release
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      # SHA256SUMS.minisig: the installers check it with the public key they embed. The secret key is only in this
+      # step, and on disk only while it runs; the signature is checked against packaging/install.sh's key before it
+      # goes out
+      - name: sign SHA256SUMS
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then echo "::warning::no MINISIGN_SECRET_KEY: SHA256SUMS goes out unsigned"; exit 0; fi
+          F=minisign-$MINISIGN_VERSION-linux.tar.gz
+          curl -fsSL "https://github.com/jedisct1/minisign/releases/download/$MINISIGN_VERSION/$F" -o "$RUNNER_TEMP/$F"
+          echo "$MINISIGN_LINUX_SHA256  $RUNNER_TEMP/$F" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$F" -C "$RUNNER_TEMP"
+          MS=$RUNNER_TEMP/minisign-linux/x86_64/minisign
+          KEY=$RUNNER_TEMP/minisign.key
+          trap 'rm -f "$KEY"' EXIT
+          # the key file as minisign -G wrote it; a secret holding only its second line works too
+          (umask 077; case "$MINISIGN_SECRET_KEY" in
+            'untrusted comment:'*) printf '%s\n' "$MINISIGN_SECRET_KEY" ;;
+            *) printf 'untrusted comment: minisign secret key\n%s\n' "$MINISIGN_SECRET_KEY" ;;
+          esac > "$KEY")
+          unset MINISIGN_SECRET_KEY
+          # -l: the legacy format, Ed25519 over the file itself, which the installers verify without minisign
+          printf '%s\n' "$MINISIGN_PASSWORD" | "$MS" -S -l -s "$KEY" -m release/SHA256SUMS -t "powerrr $GITHUB_REF_NAME"
+          PUB=$(sed -n "s/^MINISIGN_PUBKEY='\(.*\)'$/\1/p" packaging/install.sh)
+          "$MS" -V -P "$PUB" -m release/SHA256SUMS
+          cat release/SHA256SUMS.minisig
+
       - name: publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -376,8 +506,6 @@ jobs:
           WIN_SIGNED: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
         run: |
           cd release
-          sha256sum -- * > SHA256SUMS
-          cat SHA256SUMS
           VERSION="${GITHUB_REF_NAME#desktop-v}"
           NAME=$(node -p "require('../src-tauri/tauri.conf.json').productName")
           NOTE="$NAME $VERSION for macOS 11+ (Apple silicon and Intel), Windows 10+ (x64) and Linux (x86_64 AppImage and .deb)."

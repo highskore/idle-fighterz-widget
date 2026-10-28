@@ -73,7 +73,7 @@ This installs the AppImage to `~/.local/bin/powerrr`, with a menu entry. On Debi
 
 </details>
 
-All installers verify downloads against the release's `SHA256SUMS`.
+All installers verify downloads against the release's `SHA256SUMS`, and that file's minisign signature against a key they carry (see [docs/RELEASING.md](docs/RELEASING.md#signed-checksums)).
 
 ## Using it
 
