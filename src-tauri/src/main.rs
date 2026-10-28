@@ -452,7 +452,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let icon = {
         let taskbar = Taskbar::new();
-        let white = white_scouter(app, &taskbar);
+        let white = white_scouter(app, || taskbar.guess());
         watch_taskbar(app.clone(), taskbar, white);
         scouter(white)?
     };
@@ -512,24 +512,23 @@ fn scouter(white: bool) -> tauri::Result<Image<'static>> {
 
 // the tray icon setting: "light" is the white scouter (for dark taskbars), "dark" the black one, "auto" the taskbar's theme
 #[cfg(not(target_os = "macos"))]
-fn white_scouter(app: &AppHandle, taskbar: &Taskbar) -> bool {
+fn white_scouter(app: &AppHandle, auto: impl FnOnce() -> bool) -> bool {
     let pick = app.state::<State>().settings.lock().unwrap()["tray_icon"].as_str().unwrap_or("auto").to_string();
     match pick.as_str() {
         "light" => true,
         "dark" => false,
-        _ => taskbar.dark(),
+        _ => auto(),
     }
 }
 
-// every few seconds, and at once when settings change, swaps the scouter if it should change. only "auto" asks the
-// system (cheap: a registry value, or one D-Bus call; no event covers the Windows taskbar alone)
+// at once, then every few seconds and when the pick changes, swaps the scouter if it should change. only "auto" asks
+// the system (cheap: a registry value, or one D-Bus call; no event covers the Windows taskbar alone)
 #[cfg(not(target_os = "macos"))]
-fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut white: bool) {
+fn watch_taskbar(app: AppHandle, mut taskbar: Taskbar, mut white: bool) {
     let (nudge, woken) = std::sync::mpsc::channel();
     *app.state::<State>().tray_nudge.lock().unwrap() = Some(nudge);
     std::thread::spawn(move || loop {
-        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
-        let now = white_scouter(&app, &taskbar);
+        let now = white_scouter(&app, || taskbar.dark());
         if now != white {
             if let (Some(tray), Ok(icon)) = (app.tray_by_id("tray"), scouter(now)) {
                 if tray.set_icon(Some(icon)).is_ok() {
@@ -537,6 +536,7 @@ fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut white: bool) {
                 }
             }
         }
+        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
     });
 }
 
@@ -548,6 +548,9 @@ impl Taskbar {
     fn new() -> Self {
         Taskbar
     }
+    fn guess(&self) -> bool {
+        self.dark()
+    }
     fn dark(&self) -> bool {
         use winreg::{enums::HKEY_CURRENT_USER, RegKey};
         let light = RegKey::predef(HKEY_CURRENT_USER)
@@ -558,10 +561,11 @@ impl Taskbar {
 }
 
 // Linux: the freedesktop settings portal's color scheme, where there is one (live); else the GTK theme's name, read once
-// at startup on the main thread (GTK lives there). With no preference, white: most panels are dark (GNOME's top bar is)
+// at startup on the main thread (GTK lives there). With no preference, white: most panels are dark (GNOME's top bar is).
+// The portal is only asked from the watcher's thread: a slow or hung session bus must not stall startup
 #[cfg(target_os = "linux")]
 struct Taskbar {
-    bus: Option<zbus::blocking::Connection>,
+    bus: Option<Option<zbus::blocking::Connection>>, // connected on first use
     gtk_dark: Option<bool>,
 }
 #[cfg(target_os = "linux")]
@@ -569,10 +573,15 @@ impl Taskbar {
     fn new() -> Self {
         use gtk::glib::object::ObjectExt;
         let theme = gtk::Settings::default().and_then(|s| s.property::<Option<String>>("gtk-theme-name"));
-        Taskbar { bus: zbus::blocking::Connection::session().ok(), gtk_dark: theme.map(|t| t.to_lowercase().contains("dark")) }
+        Taskbar { bus: None, gtk_dark: theme.map(|t| t.to_lowercase().contains("dark")) }
     }
-    fn dark(&self) -> bool {
-        match self.bus.as_ref().and_then(color_scheme) {
+    // the first icon, without the portal; the watcher corrects it at once
+    fn guess(&self) -> bool {
+        self.gtk_dark.unwrap_or(true)
+    }
+    fn dark(&mut self) -> bool {
+        let bus = self.bus.get_or_insert_with(|| zbus::blocking::Connection::session().ok());
+        match bus.as_ref().and_then(color_scheme) {
             Some(2) => false, // prefers light
             Some(_) => true,  // 1 prefers dark, 0 no preference
             None => self.gtk_dark.unwrap_or(true),
