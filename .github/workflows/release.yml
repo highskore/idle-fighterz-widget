@@ -243,9 +243,10 @@ jobs:
           if-no-files-found: error
 
   # install.ps1 is served as https://highskore.com/install.ps1 from the highskore.com repo; packaging/install.ps1 is a
-  # copy. Here it runs as users run it (`irm … | iex` in Windows PowerShell 5.1): it must refuse a bad checksum,
-  # install this build from a stand-in for its GitHub release, reinstall over the running app, and uninstall cleanly.
-  # Then it runs against the real latest release, if that has Windows assets
+  # copy. Here it runs as users run it (`irm … | iex` in Windows PowerShell 5.1): it must refuse an elevated shell, a
+  # bad checksum, and a SHA256SUMS that is unsigned, changed after signing, signed for another release or with another
+  # key (a throwaway one made here); install this build from a stand-in for its GitHub release, reinstall over the
+  # running app, and uninstall cleanly. Then it runs against the real latest release, if that has Windows assets
   install-ps1:
     needs: build
     runs-on: windows-latest

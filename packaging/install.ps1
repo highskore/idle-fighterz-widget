@@ -31,20 +31,22 @@
     throw 'install: this is an elevated (admin) PowerShell. Powerrr installs for your user only: run this from a normal PowerShell, or set $env:POWERRR_ALLOW_ADMIN = 1 to install for this admin account anyway'
   }
 
-  # Ed25519 verification (RFC 8032): S < L, and [S]B - [k]A encodes to R, where k = SHA-512(R || A || message)
+  # Ed25519 verification (RFC 8032): S < L, and [S]B - [k]A encodes to R, where k = SHA-512(R || A || message).
+  # PowerShell names are case-insensitive, and an alias (md is mkdir) wins over a function: no local below may share a
+  # name with $P, $L, $D or $I, and no function is named like an alias
   function Test-Ed25519([byte[]]$key, [byte[]]$sig, [byte[]]$msg) {
     $P = [Numerics.BigInteger]::Pow(2, 255) - 19
     $L = [Numerics.BigInteger]::Pow(2, 252) + [Numerics.BigInteger]::Parse('27742317777372353535851937790883648493')
-    function Md($a) { $r = [Numerics.BigInteger]::Remainder($a, $P); if ($r.Sign -lt 0) { $r + $P } else { $r } }
-    function Inv($a) { [Numerics.BigInteger]::ModPow((Md $a), $P - 2, $P) }
+    function Fp($a) { $r = [Numerics.BigInteger]::Remainder($a, $P); if ($r.Sign -lt 0) { $r + $P } else { $r } }
+    function Inv($a) { [Numerics.BigInteger]::ModPow((Fp $a), $P - 2, $P) }
     function Le([byte[]]$b) { [Numerics.BigInteger]::new([byte[]]($b + [byte[]]@(0))) }   # little-endian, unsigned
-    $D = Md (([Numerics.BigInteger]-121665) * (Inv 121666))
+    $D = Fp (([Numerics.BigInteger]-121665) * (Inv 121666))
     $I = [Numerics.BigInteger]::ModPow(2, ($P - 1) / 4, $P)
     function Add($p1, $p2) {
-      $a = Md (($p1[1] - $p1[0]) * ($p2[1] - $p2[0])); $b = Md (($p1[1] + $p1[0]) * ($p2[1] + $p2[0]))
-      $c = Md ($D * 2 * $p1[3] * $p2[3]); $d = Md ($p1[2] * 2 * $p2[2])
-      $e = $b - $a; $f = $d - $c; $g = $d + $c; $h = $b + $a
-      , @((Md ($e * $f)), (Md ($g * $h)), (Md ($f * $g)), (Md ($e * $h)))
+      $aa = Fp (($p1[1] - $p1[0]) * ($p2[1] - $p2[0])); $bb = Fp (($p1[1] + $p1[0]) * ($p2[1] + $p2[0]))
+      $cc = Fp ($D * 2 * $p1[3] * $p2[3]); $dd = Fp ($p1[2] * 2 * $p2[2])
+      $e = $bb - $aa; $f = $dd - $cc; $g = $dd + $cc; $h = $bb + $aa
+      , @((Fp ($e * $f)), (Fp ($g * $h)), (Fp ($f * $g)), (Fp ($e * $h)))
     }
     function Mul($s, $q) {
       $r = @([Numerics.BigInteger]::Zero, [Numerics.BigInteger]::One, [Numerics.BigInteger]::One, [Numerics.BigInteger]::Zero)
@@ -54,16 +56,17 @@
     function Point([byte[]]$b) {
       $y = Le $b; $sign = [int]($b[31] -shr 7); $y = $y % [Numerics.BigInteger]::Pow(2, 255)
       if ($y -ge $P) { return $null }
-      $x2 = Md (($y * $y - 1) * (Inv ($D * $y * $y + 1)))
+      $x2 = Fp (($y * $y - 1) * (Inv ($D * $y * $y + 1)))
       $x = [Numerics.BigInteger]::ModPow($x2, ($P + 3) / 8, $P)
-      if (-not (Md ($x * $x - $x2)).IsZero) { $x = Md ($x * $I) }
-      if (-not (Md ($x * $x - $x2)).IsZero) { return $null }
+      if (-not (Fp ($x * $x - $x2)).IsZero) { $x = Fp ($x * $I) }
+      if (-not (Fp ($x * $x - $x2)).IsZero) { return $null }
       if ($x.IsZero -and $sign -eq 1) { return $null }
-      if ([int]!$x.IsEven -ne $sign) { $x = $P - $x }
-      , @($x, $y, [Numerics.BigInteger]::One, (Md ($x * $y)))
+      $odd = if ($x.IsEven) { 0 } else { 1 }
+      if ($odd -ne $sign) { $x = $P - $x }
+      , @($x, $y, [Numerics.BigInteger]::One, (Fp ($x * $y)))
     }
-    function Encode($p) {
-      $z = Inv $p[2]; $x = Md ($p[0] * $z); $y = Md ($p[1] * $z)
+    function Encode($pt) {
+      $z = Inv $pt[2]; $x = Fp ($pt[0] * $z); $y = Fp ($pt[1] * $z)
       if (-not $x.IsEven) { $y = $y + [Numerics.BigInteger]::Pow(2, 255) }
       $b = $y.ToByteArray(); [byte[]]$out = New-Object byte[] 32; [Array]::Copy($b, $out, [Math]::Min(32, $b.Length)); , $out
     }
@@ -73,7 +76,7 @@
     $sha = [Security.Cryptography.SHA512]::Create()
     $k = (Le $sha.ComputeHash([byte[]]($sig[0..31] + $key + $msg))) % $L
     $B = Point ([byte[]](@(0x58) + @(0x66) * 31))
-    $minusA = @((Md ($P - $A[0])), $A[1], $A[2], (Md ($P - $A[3])))
+    $minusA = @((Fp ($P - $A[0])), $A[1], $A[2], (Fp ($P - $A[3])))
     $R = Encode (Add (Mul $S $B) (Mul $k $minusA))
     return [BitConverter]::ToString($R) -eq [BitConverter]::ToString([byte[]]$sig[0..31])
   }
