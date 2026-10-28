@@ -615,3 +615,46 @@ fn color_scheme(bus: &zbus::blocking::Connection) -> Option<u32> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tauri::{
+        ipc::{CallbackFn, InvokeBody},
+        test::{get_ipc_response, mock_builder, INVOKE_KEY},
+        webview::InvokeRequest,
+        WebviewUrl, WebviewWindowBuilder,
+    };
+
+    // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
+    #[test]
+    fn each_window_may_call_only_its_own_commands() {
+        let app = mock_builder().invoke_handler(tauri::generate_handler![]).build(tauri::generate_context!(test = true)).unwrap();
+        let open = |label: &str| WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into())).build().unwrap();
+        let (main, settings) = (open("main"), open("settings"));
+        let call = |w: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str| {
+            let req = InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: w.url().unwrap(),
+                body: InvokeBody::Json(json!({})),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            };
+            !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
+        };
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "planet_start", "planet_buy"] {
+            assert!(call(&main, cmd), "main may call {cmd}");
+        }
+        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "planet_step", "planet_load", "planet_save"] {
+            assert!(!call(&main, cmd), "main may not call {cmd}");
+        }
+        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings"] {
+            assert!(call(&settings, cmd), "settings may call {cmd}");
+        }
+        for cmd in ["notify", "tray_title", "hide_widget", "planet_start", "planet_buy"] {
+            assert!(!call(&settings, cmd), "settings may not call {cmd}");
+        }
+    }
+}

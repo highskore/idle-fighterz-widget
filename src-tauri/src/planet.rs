@@ -167,38 +167,13 @@ impl<R: Renderer> crate::native::FrameSource for Frames<R> {
 }
 
 // ── the calls (HUD.md's table), as `planet_<call>` with HUD.md's argument names. `new` is the app's (the game outlives
-// the page), and `spots`/`probe` were the web's lockstep twin's
+// the page), and `spots`/`probe` were the web's lockstep twin's. The app steps, frames and saves the game itself, so
+// `load`, `step`, `step_one`, `frame`, `save` and `playing` aren't the page's to call
 
 // a HUD page loaded again mounts again: the game carries on
 #[tauri::command(rename_all = "snake_case")]
 pub fn planet_start(core: State<'_, Core>, today: String, now_ms: f64) -> Result<(), String> {
     core.with(|b| if !b.game.playing { b.start(&today, now_ms) })
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_load(core: State<'_, Core>, text: String) -> Result<(), String> {
-    if !loadable(&text) {
-        return Err("not a save".into());
-    }
-    core.with(|b| b.load(&text))
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_step(core: State<'_, Core>, elapsed: f64, now_ms: f64) -> Result<u32, String> {
-    core.with(|b| b.step(elapsed, now_ms))
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_step_one(core: State<'_, Core>, now_ms: f64) -> Result<f64, String> {
-    core.with(|b| {
-        b.clock(now_ms);
-        b.step_one()
-    })
-}
-
-#[tauri::command]
-pub fn planet_frame(core: State<'_, Core>) -> Result<String, String> {
-    core.with(|b| b.frame_json())
 }
 
 #[tauri::command]
@@ -311,28 +286,17 @@ pub fn planet_card(core: State<'_, Core>) -> Result<String, String> {
     core.with(|b| b.game.card_json())
 }
 
-#[tauri::command]
-pub fn planet_save(core: State<'_, Core>) -> Result<String, String> {
-    core.with(|b| b.game.save_json())
-}
-
-#[tauri::command]
-pub fn planet_playing(core: State<'_, Core>) -> Result<bool, String> {
-    core.with(|b| b.game.playing)
-}
-
 /// Every `planet_*` command, for `invoke_handler` (main.rs adds the app's own).
 macro_rules! planet_commands {
     ($($more:path),* $(,)?) => {
         tauri::generate_handler![
             $($more,)*
-            crate::planet::planet_start, crate::planet::planet_load, crate::planet::planet_step, crate::planet::planet_step_one, crate::planet::planet_frame,
-            crate::planet::planet_resend, crate::planet::planet_resize, crate::planet::planet_pointer_down, crate::planet::planet_pointer_move,
+            crate::planet::planet_start, crate::planet::planet_resend, crate::planet::planet_resize, crate::planet::planet_pointer_down, crate::planet::planet_pointer_move,
             crate::planet::planet_pointer_up, crate::planet::planet_pointer_cancel, crate::planet::planet_key, crate::planet::planet_train,
             crate::planet::planet_kaioken, crate::planet::planet_buy, crate::planet::planet_learn, crate::planet::planet_respec, crate::planet::planet_learn_angel,
             crate::planet::planet_auto_next, crate::planet::planet_pick_wish, crate::planet::planet_pick_hero, crate::planet::planet_menu,
             crate::planet::planet_angels, crate::planet::planet_ascend_info, crate::planet::planet_god_info, crate::planet::planet_zeno_info,
-            crate::planet::planet_card, crate::planet::planet_save, crate::planet::planet_playing
+            crate::planet::planet_card
         ]
     };
 }
@@ -434,7 +398,7 @@ mod tests {
                 call(&w, "kaioken", json!({}));
             }
             if i % 10 == 0 {
-                assert_eq!(call(&w, "frame", json!({})), json!(b.frame_json()), "frame {i} on request");
+                assert_eq!(core.with(|c| c.frame_json()).unwrap(), b.frame_json(), "frame {i} on request");
             }
             if i % 300 == 0 {
                 let menu = b.game.menu_json();
@@ -452,21 +416,36 @@ mod tests {
                     ("god_info", b.game.god_info_json()),
                     ("zeno_info", b.game.zeno_info_json()),
                     ("card", b.game.card_json()),
-                    ("save", b.game.save_json()),
                 ] {
                     assert_eq!(call(&w, cmd, json!({})), json!(want), "{cmd} at {i}");
                 }
+                assert_eq!(core.with(|c| c.game.save_json()).unwrap(), b.game.save_json(), "save at {i}");
             }
         }
         assert!(frames > 100, "{frames} frames sent");
-        assert_eq!(call(&w, "step", json!({ "elapsed": 0.1, "now_ms": t0 })), json!(b.step(0.1, t0)));
-        b.clock(t0);
-        assert_eq!(call(&w, "step_one", json!({ "now_ms": t0 })), json!(b.step_one()));
-        assert_eq!(call(&w, "playing", json!({})), json!(true));
+        assert!(core.with(|c| c.game.playing).unwrap());
         b.resend();
         call(&w, "resend", json!({}));
-        assert_eq!(call(&w, "frame", json!({})), json!(b.frame_json()));
-        assert_eq!(call(&w, "save", json!({})), json!(b.game.save_json()));
+        assert_eq!(core.with(|c| c.frame_json()).unwrap(), b.frame_json());
+        assert_eq!(core.with(|c| c.game.save_json()).unwrap(), b.game.save_json());
+    }
+
+    // the app steps, frames and saves the game: the page can't, nor load a save of its own
+    #[test]
+    fn the_page_cannot_drive_the_game_loop() {
+        let (_app, w) = app(file("gone"));
+        for cmd in ["load", "step", "step_one", "frame", "save", "playing"] {
+            let req = InvokeRequest {
+                cmd: format!("planet_{cmd}"),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: w.url().unwrap(),
+                body: InvokeBody::Json(json!({ "text": "{}", "elapsed": 1e9, "now_ms": 0.0 })),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            };
+            assert!(get_ipc_response(&w, req).is_err(), "planet_{cmd} is still callable");
+        }
     }
 
     #[test]
@@ -488,20 +467,10 @@ mod tests {
         fs::write(&f, "[".repeat(100_000)).unwrap();
         let core = Core::new(SEED, f.clone());
         assert!(!core.with(|b| b.game.playing).unwrap());
-        let (app, w) = app(file("deep-cmd"));
-        let req = |text: String| InvokeRequest {
-            cmd: "planet_load".into(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: w.url().unwrap(),
-            body: InvokeBody::Json(json!({ "text": text })),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.to_string(),
-        };
-        assert!(get_ipc_response(&w, req("{\"a\":".repeat(50_000))).is_err());
-        assert!(get_ipc_response(&w, req(format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40)))).is_ok(), "brackets in a string are text");
+        assert!(!loadable(&"{\"a\":".repeat(50_000)));
+        assert!(loadable(&format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40))), "brackets in a string are text");
         assert!(!loadable(&" ".repeat(MAX_SAVE + 1)));
-        drop(app);
         let _ = fs::remove_file(f);
+
     }
 }
