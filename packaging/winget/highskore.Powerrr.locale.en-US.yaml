@@ -1,0 +1,16 @@
+# winget manifest template (default locale file)
+PackageIdentifier: highskore.Powerrr
+PackageVersion: "{{VERSION}}"
+PackageLocale: en-US
+Publisher: highskore
+PublisherUrl: https://highskore.com
+PackageName: Powerrr
+PackageUrl: https://github.com/highskore/powerrr
+License: Proprietary
+ShortDescription: Idle Dragon Ball planet game as a desktop widget
+Tags:
+  - game
+  - idle
+  - widget
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -154,6 +154,9 @@ jobs:
         shell: powershell
         run: |
           $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
+          # Scoop unpacks this same installer with 7-Zip (packaging/scoop/powerrr.json): the app must sit at its root
+          7z x $setup.FullName -o"$env:RUNNER_TEMP\unpacked" -y | Out-Null
+          if (-not (Test-Path "$env:RUNNER_TEMP\unpacked\powerrr.exe")) { Get-ChildItem -Recurse "$env:RUNNER_TEMP\unpacked"; throw 'no powerrr.exe at the root of the installer' }
           Start-Process $setup.FullName -ArgumentList '/S' -Wait
           $exe = Get-ChildItem "$env:LOCALAPPDATA\Powerrr\*.exe" | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
           if (-not $exe) { throw 'nothing installed in %LOCALAPPDATA%\Powerrr' }
