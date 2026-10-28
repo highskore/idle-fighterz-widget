@@ -69,7 +69,7 @@ This installs the AppImage to `~/.local/bin/powerrr`, with a menu entry. On Debi
 - AppImages need FUSE 2: `sudo apt install libfuse2` (`libfuse2t64` on Ubuntu 24.04).
 - **Floating needs a compositor.** Every Wayland desktop has one, as do GNOME, KDE and Xfce on X11. Without one, the widget stays in window mode.
 - **The tray icon needs AppIndicator support.** KDE, Xfce, Cinnamon and Ubuntu have it built in. On stock GNOME, install the *AppIndicator and KStatusNotifierItem Support* extension.
-- **On Wayland**, the global shortcut only works while an X11 window has focus. Instead, bind a desktop shortcut to `powerrr`: launching it again shows the running widget.
+- **On Wayland there is no global shortcut**: it's an X11 key grab, so settings shows "not on wayland" in its place. Instead, bind a desktop shortcut to `powerrr`: launching it again shows the running widget.
 
 </details>
 

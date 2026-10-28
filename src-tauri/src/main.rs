@@ -45,6 +45,7 @@ struct State {
     tray: Mutex<Option<Tray>>,
     power: Mutex<String>, // the power level as the widget last sent it, for the menu-bar title
     transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
+    wayland: bool,        // no global shortcut and no pointer polling there
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -66,6 +67,7 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["os"] = json!(std::env::consts::OS);
     let transparent = app.state::<State>().transparent;
     s["transparent"] = json!(transparent);
+    s["wayland"] = json!(app.state::<State>().wayland);
     if !transparent {
         s["mode"] = json!("window");
     }
@@ -84,7 +86,7 @@ fn get_settings(app: AppHandle) -> Value {
 fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
     if let Some(new) = settings.get("shortcut").and_then(Value::as_str) {
         let old = app.state::<State>().settings.lock().unwrap()["shortcut"].as_str().unwrap_or("").to_string();
-        if new != old {
+        if new != old && !app.state::<State>().wayland {
             bind(&app, &old, new)?;
         }
     }
@@ -286,16 +288,20 @@ fn main() {
             }
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
-            let transparent = can_be_transparent(&main);
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent });
+            let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
-            if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
+            // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
+            // bound at all, and settings says to use a desktop shortcut instead
+            if wayland {
+                eprintln!("wayland: no global show/hide shortcut");
+            } else if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
                 eprintln!("show/hide shortcut not bound: {e}");
             }
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
-            if !wayland(&main) {
+            if !wayland {
                 watch_pointer(app.handle().clone());
             }
             // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
