@@ -19,6 +19,9 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 mod notes;
 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
 mod native;
+#[cfg(feature = "rust-core")]
+#[macro_use]
+mod planet;
 
 // window sides in points, square: the planet sits in the middle with room for its visitors
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
@@ -288,10 +291,16 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
     let app = app.plugin(tauri_plugin_notification::init());
-    app.invoke_handler(tauri::generate_handler![
-        get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings
-    ])
-        .setup(|app| {
+    macro_rules! handler {
+        ($($m:ident)::+) => {
+            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings]
+        };
+    }
+    #[cfg(not(feature = "rust-core"))]
+    let app = app.invoke_handler(handler!(tauri::generate_handler));
+    #[cfg(feature = "rust-core")]
+    let app = app.invoke_handler(handler!(planet_commands));
+    app.setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
             let file = app.path().app_config_dir()?.join("settings.json");
@@ -322,6 +331,15 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
+            // the game runs here, and the window shows only its HUD (dist/hud.html, npm run page:hud)
+            #[cfg(feature = "rust-core")]
+            {
+                app.manage(planet::Core::new(planet::seed(), app.path().app_data_dir()?.join("power.json")));
+                main.navigate(main.url()?.join("hud.html")?)?;
+                planet::run(app.handle().clone(), |app| {
+                    app.state::<State>().settings.lock().unwrap()["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0)
+                });
+            }
             if !wayland {
                 watch_pointer(app.handle().clone());
             }
@@ -339,6 +357,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = e {
                 show_widget(app, true);
+            }
+            #[cfg(feature = "rust-core")]
+            if let tauri::RunEvent::Exit = e {
+                app.state::<planet::Core>().save();
             }
             let _ = (app, e);
         });
@@ -384,6 +406,8 @@ fn watch_pointer(app: AppHandle) {
             let (Ok(c), Ok(p), Ok(s), Ok(f)) = (app.cursor_position(), w.outer_position(), w.outer_size(), w.scale_factor()) else { continue };
             let (x, y) = ((c.x - p.x as f64) / f, (c.y - p.y as f64) / f);
             let inside = x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
+            #[cfg(feature = "rust-core")]
+            app.state::<planet::Core>().hovered.store(inside, std::sync::atomic::Ordering::Relaxed);
             let now = inside.then_some((x.round() as i32, y.round() as i32));
             if now != last {
                 let _ = w.emit("pointer", json!({ "inside": inside, "x": x, "y": y }));
