@@ -75,9 +75,18 @@ function icns(icon) {
   const head = Buffer.alloc(8); head.write('icns', 0, 'ascii'); head.writeUInt32BE(8 + parts.reduce((a, p) => a + p.length, 0), 4)
   return Buffer.concat([head, ...parts])
 }
+// .ico (Windows: the exe, the installer, the taskbar) is a directory of PNG entries; 256 is stored as 0
+function ico(icon) {
+  const sizes = [16, 32, 48, 64, 128, 256], data = sizes.map(s => png(scale(icon, s)))
+  const head = Buffer.alloc(6 + 16 * sizes.length); head.writeUInt16LE(1, 2); head.writeUInt16LE(sizes.length, 4)
+  let at = head.length
+  sizes.forEach((s, i) => { const e = 6 + 16 * i; head[e] = head[e + 1] = s & 255; head.writeUInt16LE(1, e + 4); head.writeUInt16LE(32, e + 6); head.writeUInt32LE(data[i].length, e + 8); head.writeUInt32LE(at, e + 12); at += data[i].length })
+  return Buffer.concat([head, ...data])
+}
 
 const icon = ball()
 for (const [name, s] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.png', 256], ['icon.png', 1024]]) writeFileSync(join(out, name), png(scale(icon, s)))
 writeFileSync(join(out, 'icon.icns'), icns(icon))
+writeFileSync(join(out, 'icon.ico'), ico(icon))
 writeFileSync(join(out, 'tray.png'), png(tray()))
 console.log('icons written to', out)

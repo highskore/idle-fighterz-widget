@@ -1,0 +1,7 @@
+# winget manifest template (version file). README.md ("winget and Scoop") fills in {{VERSION}}, {{SHA256}} and {{DATE}} from a
+# published release; the filled-in set goes to microsoft/winget-pkgs as manifests/h/highskore/Powerrr/<version>/
+PackageIdentifier: highskore.Powerrr
+PackageVersion: "{{VERSION}}"
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

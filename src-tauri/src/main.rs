@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // no console window behind the widget on Windows
 // The power planet as a desktop pet: one frameless, transparent window showing the bundled page, a settings
 // window, and a menu-bar icon. Settings are app config in a JSON file; the game itself is never saved.
 use serde_json::{json, Value};
@@ -26,6 +27,8 @@ const DEFAULTS: &str = r#"{
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "shortcut": "Alt+Cmd+KeyP"
 }"#;
+#[cfg(not(target_os = "macos"))]
+const SHORTCUT: &str = "Ctrl+Alt+KeyP"; // Win+Alt+P / Super+Alt+P belong to the desktop; ⌥⌘P stays the macOS default
 
 struct Tray {
     show: MenuItem<Wry>,
@@ -39,6 +42,7 @@ struct State {
     file: PathBuf,
     tray: Mutex<Option<Tray>>,
     power: Mutex<String>, // the power level as the widget last sent it, for the menu-bar title
+    transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -52,10 +56,17 @@ fn merge(base: &mut Value, over: &Value) {
     }
 }
 
-// what the pages see: the settings, plus whether login launch is on and the app's name (productName, the one place it's set)
+// what the pages see: the settings, plus whether login launch is on, the app's name (productName, the one place it's set),
+// the OS (for key labels) and whether the window can be see-through (if not, the mode reads as window)
 fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["login"] = json!(app.autolaunch().is_enabled().unwrap_or(false));
     s["name"] = json!(app.package_info().name);
+    s["os"] = json!(std::env::consts::OS);
+    let transparent = app.state::<State>().transparent;
+    s["transparent"] = json!(transparent);
+    if !transparent {
+        s["mode"] = json!("window");
+    }
     s
 }
 
@@ -127,7 +138,7 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         let _ = win.set_size(LogicalSize::new(SIZES[size].2, SIZES[size].2));
     }
     // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither
-    let windowed = s["mode"] == "window";
+    let windowed = s["mode"] == "window" || !app.state::<State>().transparent;
     let _ = win.set_shadow(windowed);
     let _ = win.set_resizable(windowed);
     if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
@@ -140,12 +151,19 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     show_power(app, s);
 }
 
-// the power level beside the menu-bar icon, or the icon alone when that's turned off
+// the power level beside the menu-bar icon, or the icon alone when that's turned off. Windows trays have no title, so
+// it goes in the tooltip; Linux trays have no tooltip, but an AppIndicator label beside the icon
 fn show_power(app: &AppHandle, s: &Value) {
     let Some(tray) = app.tray_by_id("tray") else { return };
     let power = app.state::<State>().power.lock().unwrap().clone();
     let on = s["menubar_power"].as_bool().unwrap_or(true) && !power.is_empty();
+    #[cfg(not(target_os = "windows"))]
     let _ = tray.set_title(on.then_some(power));
+    #[cfg(target_os = "windows")]
+    {
+        let name = &app.package_info().name;
+        let _ = tray.set_tooltip(Some(if on { format!("{name} {power}") } else { name.clone() }));
+    }
 }
 
 #[tauri::command]
@@ -179,7 +197,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
         .title("settings")
         .inner_size(380.0, 883.0)
         .decorations(false) // the page draws its own slim title bar with a close button
-        .transparent(true)
+        .transparent(app.state::<State>().transparent)
         .shadow(true)
         .resizable(false)
         .minimizable(false)
@@ -222,15 +240,24 @@ fn request_notify_permission() {
     notes::request(|| {});
 }
 
-// once denied, only System Settings can turn them back on
+// once denied, only System Settings can turn them back on. elsewhere permission is always "granted", so it's never offered
 #[tauri::command]
 fn open_notify_settings(app: AppHandle) {
-    let id = &app.config().identifier;
-    let _ = std::process::Command::new("open").arg(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}")).spawn();
+    #[cfg(target_os = "macos")]
+    {
+        let id = &app.config().identifier;
+        let _ = std::process::Command::new("open").arg(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}")).spawn();
+    }
+    let _ = app;
 }
 
 fn main() {
-    let app = tauri::Builder::default()
+    let app = tauri::Builder::default();
+    // macOS reopens the running app itself (RunEvent::Reopen below); elsewhere a second launch would be a second
+    // widget and a second tray icon, so it shows the first one's widget instead and exits
+    #[cfg(not(target_os = "macos"))]
+    let app = app.plugin(tauri_plugin_single_instance::init(|app, _, _| show_widget(app, true)));
+    let app = app
         .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(StateFlags::POSITION).build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
@@ -244,14 +271,20 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
             let file = app.path().app_config_dir()?.join("settings.json");
             let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
+            #[cfg(not(target_os = "macos"))]
+            {
+                settings["shortcut"] = json!(SHORTCUT);
+            }
             if let Some(saved) = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
                 merge(&mut settings, &saved);
             }
             if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
                 settings["layout"] = json!(7); // layouts 4 and 5 were dropped
             }
-            let _ = app.get_webview_window("main").expect("main window").set_title(&app.package_info().name);
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()) });
+            let main = app.get_webview_window("main").expect("main window");
+            let _ = main.set_title(&app.package_info().name);
+            let transparent = can_be_transparent(&main);
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
             if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
@@ -259,7 +292,9 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
-            watch_pointer(app.handle().clone());
+            if !wayland(&main) {
+                watch_pointer(app.handle().clone());
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -272,6 +307,33 @@ fn main() {
             }
             let _ = (app, e);
         });
+}
+
+// on X11 with no compositing manager, transparent pixels come out black: the widget then sticks to window mode
+#[cfg(target_os = "linux")]
+fn can_be_transparent(w: &tauri::WebviewWindow) -> bool {
+    use gtk::prelude::WidgetExt;
+    let ok = w.gtk_window().ok().and_then(|g| WidgetExt::screen(&g)).is_some_and(|s| s.is_composited() && s.rgba_visual().is_some());
+    if !ok {
+        eprintln!("no compositor: transparency is off, the widget stays in window mode");
+    }
+    ok
+}
+#[cfg(not(target_os = "linux"))]
+fn can_be_transparent(_: &tauri::WebviewWindow) -> bool {
+    true
+}
+
+// Wayland tells no app where the pointer or its own window is (tao reports 0,0), so the poll below would always see
+// the pointer "inside". there, as on X11, an unfocused window still gets pointer moves, and the page hears them itself
+#[cfg(target_os = "linux")]
+fn wayland(w: &tauri::WebviewWindow) -> bool {
+    use gtk::{glib::object::ObjectExt, prelude::WidgetExt};
+    w.gtk_window().ok().map(|g| g.display().type_().name().contains("Wayland")).unwrap_or(false)
+}
+#[cfg(not(target_os = "linux"))]
+fn wayland(_: &tauri::WebviewWindow) -> bool {
+    false
 }
 
 // an inactive window gets no mouse-moved events, so the page couldn't tell it's being hovered: tell it, 8 times a second
@@ -312,8 +374,14 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
 
+    // the scouter is a black template image that only macOS tints; on dark Windows and Linux panels it'd vanish, so the
+    // dragon ball goes there
+    #[cfg(target_os = "macos")]
+    let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+    #[cfg(not(target_os = "macos"))]
+    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     TrayIconBuilder::with_id("tray")
-        .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .icon(icon)
         .icon_as_template(true)
         .tooltip(name)
         .menu(&menu)

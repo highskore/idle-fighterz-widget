@@ -27,6 +27,8 @@ input[type="checkbox"]:checked::after { transform: translateX(12px); }
 input:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .seg { display: flex; gap: 2px; padding: 2px; background: #efefec; border-radius: 8px; }
 .seg button { font: inherit; text-transform: lowercase; padding: 3px 9px; color: var(--muted); background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.row b { font-weight: inherit; }
+.seg button:disabled { opacity: .4; cursor: default; }
 .seg button.on { color: var(--ink); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
 input[type="range"] { width: 130px; accent-color: var(--gold); }
 input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
@@ -59,11 +61,11 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <label class="row"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
 <label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
 <div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
-<label class="row"><span>show power in menu bar</span><input type="checkbox" data-k="menubar_power"></label>
+<label class="row"><span>show power in <b id="bar">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
 <label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 
 <h2>notifications</h2>
-<div class="row"><span>macos <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
+<div class="row"><span><b id="os">macos</b> <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
 <label class="row"><span>villain raids</span><input type="checkbox" data-n="raid"></label>
 <label class="row"><span>the dragon is summoned</span><input type="checkbox" data-n="shenron"></label>
 <label class="row"><span>trips to other worlds</span><input type="checkbox" data-n="trip"></label>
@@ -89,7 +91,12 @@ function render(v) {
   $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
   $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));
   document.querySelectorAll('[data-sel]').forEach(e => { e.value = s[e.dataset.sel]; });
+  MAC = s.os === 'macos';
   if (!recording) showKey();
+  $('os').textContent = MAC ? 'macos' : s.os === 'windows' ? 'windows' : 'system';
+  $('bar').textContent = MAC ? 'menu bar' : 'tray';
+  // no compositor (Linux): the window can't be see-through, so floating isn't on offer
+  document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
   $('quit').textContent = 'quit ' + s.name.toLowerCase();
 }
 document.querySelectorAll('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
@@ -107,10 +114,13 @@ addEventListener('focus', checkPerm);
 window.__TAURI__.event.listen('permission', e => showPerm(e.payload));
 checkPerm();
 
-// the show/hide shortcut: click, then press the keys. it needs ⌘, ⌃ or ⌥ (or a function key) so typing can't trigger it
+// the show/hide shortcut: click, then press the keys. it needs ⌘, ⌃ or ⌥ (or a function key) so typing can't trigger it.
+// macOS shows the key symbols, Windows and Linux spell them out: Ctrl+Alt+P
 const MODS = [['ctrlKey', 'Ctrl', '⌃'], ['altKey', 'Alt', '⌥'], ['shiftKey', 'Shift', '⇧'], ['metaKey', 'Cmd', '⌘']];
 const SYM = Object.fromEntries(MODS.map(([, k, s]) => [k, s]));
-const keyText = sc => sc ? sc.split('+').map(p => SYM[p] || p.replace(/^(Key|Digit)/, '').replace(/^Arrow/, '')).join('') : 'none';
+let MAC = true;
+const keyName = p => MAC ? SYM[p] || p : p === 'Cmd' ? 'Super' : p;
+const keyText = sc => sc ? sc.split('+').map(p => keyName(p).replace(/^(Key|Digit)/, '').replace(/^Arrow/, '')).join(MAC ? '' : '+') : 'none';
 let recording = false;
 function showKey() { recording = false; $('key').classList.remove('rec'); $('key').textContent = keyText(s.shortcut); $('nokey').hidden = !s.shortcut; }
 function setKey(sc) { $('keyerr').textContent = ''; set({ shortcut: sc }).catch(() => { $('keyerr').textContent = 'taken'; showKey(); }); }
@@ -122,7 +132,7 @@ addEventListener('keydown', e => {
   e.preventDefault(); e.stopImmediatePropagation();
   if (e.key === 'Escape') return showKey();
   if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Fn'].includes(e.key)) return;
-  if (!(e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.code))) { $('keyerr').textContent = 'add ⌘, ⌃ or ⌥'; return; }
+  if (!(e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.code))) { $('keyerr').textContent = MAC ? 'add ⌘, ⌃ or ⌥' : 'add ctrl or alt'; return; }
   recording = false; setKey([...MODS.filter(([m]) => e[m]).map(([, k]) => k), e.code].join('+'));
 }, true);
 document.querySelectorAll('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const k = g.dataset.seg; set({ [k]: k === 'layout' ? +b.dataset.v : b.dataset.v }); }));
@@ -133,7 +143,7 @@ for (const k of ['from', 'to']) $(k).addEventListener('change', () => set({ quie
 $('quit').addEventListener('click', () => invoke('quit'));
 const close = () => window.__TAURI__.window.getCurrentWindow().close();
 $('close').addEventListener('click', close);
-addEventListener('keydown', e => { if (e.key === 'Escape' || (e.metaKey && e.key === 'w')) close(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' || ((MAC ? e.metaKey : e.ctrlKey) && e.key === 'w')) close(); });
 invoke('get_settings').then(render);
 window.__TAURI__.event.listen('settings', e => render(e.payload));
 </script>

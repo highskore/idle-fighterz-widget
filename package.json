@@ -7,7 +7,7 @@
     "icons": "node scripts/icons.mjs",
     "clouds": "node scripts/clouds.mjs",
     "dev": "npm run -s page && tauri dev",
-    "build": "npm run -s page && tauri build --bundles app",
+    "build": "npm run -s page && tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {
