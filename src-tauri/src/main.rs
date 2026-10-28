@@ -21,7 +21,7 @@ mod notes;
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "e", "mode": "floating",
+  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating",
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "shortcut": "Alt+Cmd+KeyP"
@@ -159,7 +159,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     }
     let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("settings")
-        .inner_size(380.0, 814.0)
+        .inner_size(380.0, 848.0)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(true)
         .shadow(true)
