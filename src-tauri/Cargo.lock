@@ -2683,8 +2683,12 @@ version = "0.1.1"
 dependencies = [
  "block2",
  "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
+ "objc2-quartz-core",
  "objc2-user-notifications",
+ "png",
  "serde_json",
  "tauri",
  "tauri-build",

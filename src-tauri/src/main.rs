@@ -16,6 +16,8 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "macos")]
 mod notes;
+#[cfg(all(target_os = "macos", feature = "native-renderer"))]
+mod native;
 
 // window sides in points, square: the planet sits in the middle with room for its visitors
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
@@ -244,8 +246,9 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
             let file = app.path().app_config_dir()?.join("settings.json");
             let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
-            if let Some(saved) = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
-                merge(&mut settings, &saved);
+            let saved = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+            if let Some(saved) = &saved {
+                merge(&mut settings, saved);
             }
             if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
                 settings["layout"] = json!(7); // layouts 4 and 5 were dropped
@@ -260,6 +263,11 @@ fn main() {
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
             watch_pointer(app.handle().clone());
+            // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
+            #[cfg(all(target_os = "macos", feature = "native-renderer"))]
+            if let Some(src) = saved.as_ref().and_then(native::wanted) {
+                native::start(app.handle(), src)?;
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
