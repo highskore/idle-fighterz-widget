@@ -2,6 +2,22 @@
 
 The [highskore.com](https://highskore.com) idle planet game as a macOS desktop pet: a frameless [Tauri v2](https://v2.tauri.app) window with the planet and its runner floating over the wallpaper, and a menu-bar icon. The name is set once, `productName` in `src-tauri/tauri.conf.json` ("Powerrr"; the UI writes it lowercase), and everything else reads it from there. The bundle id is `com.highskore.powerrr`.
 
+## Install
+
+```sh
+curl -fsSL https://highskore.com/install.sh | sh
+```
+
+or with Homebrew:
+
+```sh
+brew install --cask highskore/tap/powerrr
+```
+
+Builds aren't notarized yet. The curl install opens straight away; a Homebrew or browser download is stopped by macOS on first launch, so run `xattr -dr com.apple.quarantine /Applications/Powerrr.app` once (or allow it in System Settings → Privacy & Security).
+
+## Build from source
+
 The game is [highskore/planet](https://github.com/highskore/planet), a submodule at `game/`. You need Node, Rust and Xcode's command line tools.
 
 ```sh

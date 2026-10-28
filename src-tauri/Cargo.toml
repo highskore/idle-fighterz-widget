@@ -1,6 +1,6 @@
 [package]
 name = "powerrr"
-version = "0.1.0"
+version = "0.1.1"
 description = "powerrr: the highskore planet game as a desktop widget"
 edition = "2021"
 publish = false
