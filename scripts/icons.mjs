@@ -28,11 +28,17 @@ function ball(N = 32) {
   return { N, px }
 }
 
-// the menu-bar icon: a black silhouette with the star punched out (macOS tints template images itself)
-function tray(N = 18) {
-  const px = new Uint32Array(N * N), c = (N - 1) / 2, r = N / 2 - .5
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if ((x - c) ** 2 + (y - c) ** 2 <= r * r) px[y * N + x] = 0x000000ff
-  STAR.forEach((row, j) => row.forEach((on, i) => { if (on) px[(6 + j) * N + 6 + i] = 0 }))
+// the menu-bar icon: a ball with a star punched out, black on clear so macOS tints it as a template image. drawn
+// smooth (8×8 samples a pixel) at 36px, which the tray shows at 18pt: sharp on retina, not blocky
+function tray(N = 36) {
+  const px = new Uint32Array(N * N), c = N / 2, r = 16
+  const pts = Array.from({ length: 10 }, (_, k) => { const a = -Math.PI / 2 + k * Math.PI / 5, q = k % 2 ? 3.4 : 8.4; return [c + Math.cos(a) * q, c + .6 + Math.sin(a) * q] })
+  const inStar = (x, y) => { let on = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, yi] = pts[i], [xj, yj] = pts[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) on = !on } return on }
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    let hit = 0
+    for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) { const sx = x + (i + .5) / 8, sy = y + (j + .5) / 8; if ((sx - c) ** 2 + (sy - c) ** 2 <= r * r && !inStar(sx, sy)) hit++ }
+    px[y * N + x] = Math.round(hit / 64 * 255)   // black, alpha only
+  }
   return { N, px }
 }
 
@@ -59,5 +65,5 @@ function icns(icon) {
 const icon = ball()
 for (const [name, s] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.png', 256], ['icon.png', 1024]]) writeFileSync(join(out, name), png(scale(icon, s)))
 writeFileSync(join(out, 'icon.icns'), icns(icon))
-writeFileSync(join(out, 'tray.png'), png(scale(tray(), 36)))
+writeFileSync(join(out, 'tray.png'), png(tray()))
 console.log('icons written to', out)

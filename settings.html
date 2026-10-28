@@ -32,6 +32,13 @@ input[type="range"] { width: 130px; accent-color: var(--gold); }
 input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .times { display: flex; gap: 6px; align-items: center; }
 .times[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+.pill { font: inherit; text-transform: lowercase; padding: 3px 10px; color: var(--ink); background: #efefec; border: 0; border-radius: 999px; cursor: pointer; }
+.pill:hover { background: #e4e4e0; }
+.key { min-width: 64px; font: inherit; padding: 3px 10px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.key.rec { color: var(--gold); border-color: var(--gold); }
+.keys { display: flex; align-items: center; gap: 4px; }
+.keys .pill { padding: 3px 8px; color: var(--muted); }
+.row small.err { color: #c0392b; }
 .quit { display: block; width: 100%; margin-top: 20px; padding: 9px; font: inherit; text-transform: lowercase; color: #fff; background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
 </style>
 </head>
@@ -43,12 +50,17 @@ input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--li
 <h2>widget</h2>
 <label class="row"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
 <div class="row"><span>size</span><div class="seg" data-seg="size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button></div></div>
-<div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
+<div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
 <div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
+<div class="row"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+<div class="row"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
+<div class="row"><span>cloud shape</span><div class="seg" data-seg="cloud_shape"><button data-v="a">bank</button><button data-v="b">halo</button><button data-v="c">puffs</button><button data-v="d">plate</button></div></div>
 <label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
+<div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
 <label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 
 <h2>notifications</h2>
+<div class="row"><span>macos <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
 <label class="row"><span>villain raids</span><input type="checkbox" data-n="raid"></label>
 <label class="row"><span>the dragon is summoned</span><input type="checkbox" data-n="shenron"></label>
 <label class="row"><span>trips to other worlds</span><input type="checkbox" data-n="trip"></label>
@@ -57,7 +69,7 @@ input[type="time"] { font: inherit; padding: 2px 4px; border: 1px solid var(--li
 <label class="row"><span>quiet hours</span><input type="checkbox" id="quiet"></label>
 <div class="row"><span>quiet between</span><div class="times" id="times"><input type="time" id="from"><span>–</span><input type="time" id="to"></div></div>
 
-<button type="button" class="quit" id="quit">quit power planet</button>
+<button type="button" class="quit" id="quit">quit</button>
 </main>
 </div>
 
@@ -72,9 +84,41 @@ function render(v) {
   document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg]) === b.dataset.v)));
   $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
   $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));
+  if (!recording) showKey();
+  $('quit').textContent = 'quit ' + s.name.toLowerCase();
 }
 document.querySelectorAll('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
-document.querySelectorAll('[data-n]').forEach(i => i.addEventListener('change', () => set({ notify: { [i.dataset.n]: i.checked } })));
+document.querySelectorAll('[data-n]').forEach(i => i.addEventListener('change', () => { set({ notify: { [i.dataset.n]: i.checked } }); if (i.checked && perm === 'ask') invoke('request_notify_permission'); }));
+
+// macOS asks once, the first time a notification is switched on (or the first one is due); after that only
+// System Settings can change the answer
+const PERM = { granted: ['allowed', ''], ask: ['not asked yet', 'allow'], denied: ['blocked', 'open settings'], unavailable: ['only in the installed app', ''] };
+let perm = '';
+function showPerm(p) { perm = p; const [text, btn] = PERM[p] || PERM.ask; $('permv').textContent = text; $('perm').textContent = btn; $('perm').hidden = !btn; }
+const checkPerm = () => invoke('notify_permission').then(showPerm);
+$('perm').addEventListener('click', () => invoke(perm === 'denied' ? 'open_notify_settings' : 'request_notify_permission'));
+addEventListener('focus', checkPerm);
+window.__TAURI__.event.listen('permission', e => showPerm(e.payload));
+checkPerm();
+
+// the show/hide shortcut: click, then press the keys. it needs ⌘, ⌃ or ⌥ (or a function key) so typing can't trigger it
+const MODS = [['ctrlKey', 'Ctrl', '⌃'], ['altKey', 'Alt', '⌥'], ['shiftKey', 'Shift', '⇧'], ['metaKey', 'Cmd', '⌘']];
+const SYM = Object.fromEntries(MODS.map(([, k, s]) => [k, s]));
+const keyText = sc => sc ? sc.split('+').map(p => SYM[p] || p.replace(/^(Key|Digit)/, '').replace(/^Arrow/, '')).join('') : 'none';
+let recording = false;
+function showKey() { recording = false; $('key').classList.remove('rec'); $('key').textContent = keyText(s.shortcut); $('nokey').hidden = !s.shortcut; }
+function setKey(sc) { $('keyerr').textContent = ''; set({ shortcut: sc }).catch(() => { $('keyerr').textContent = 'taken'; showKey(); }); }
+$('key').addEventListener('click', () => { recording = true; $('key').classList.add('rec'); $('key').textContent = 'press keys…'; $('keyerr').textContent = ''; });
+$('key').addEventListener('blur', () => recording && showKey());
+$('nokey').addEventListener('click', () => setKey(''));
+addEventListener('keydown', e => {
+  if (!recording) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (e.key === 'Escape') return showKey();
+  if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Fn'].includes(e.key)) return;
+  if (!(e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.code))) { $('keyerr').textContent = 'add ⌘, ⌃ or ⌥'; return; }
+  recording = false; setKey([...MODS.filter(([m]) => e[m]).map(([, k]) => k), e.code].join('+'));
+}, true);
 document.querySelectorAll('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const k = g.dataset.seg; set({ [k]: k === 'layout' ? +b.dataset.v : b.dataset.v }); }));
 $('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity').value + '%'; set({ opacity: $('opacity').value / 100 }); });
 $('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));

@@ -9,16 +9,22 @@ use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+#[cfg(target_os = "macos")]
+mod notes;
+
 // window sides in points, square: the planet sits in the middle with room for its visitors
-const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 240.0), ("medium", "Medium", 340.0), ("large", "Large", 480.0)];
+const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 1, "hud": "hover",
+  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "a", "mode": "floating",
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
-  "quiet": { "on": false, "from": "22:00", "to": "08:00" }
+  "quiet": { "on": false, "from": "22:00", "to": "08:00" },
+  "shortcut": "Alt+Cmd+KeyP"
 }"#;
 
 struct Tray {
@@ -45,8 +51,10 @@ fn merge(base: &mut Value, over: &Value) {
     }
 }
 
+// what the pages see: the settings, plus whether login launch is on and the app's name (productName, the one place it's set)
 fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["login"] = json!(app.autolaunch().is_enabled().unwrap_or(false));
+    s["name"] = json!(app.package_info().name);
     s
 }
 
@@ -56,9 +64,16 @@ fn get_settings(app: AppHandle) -> Value {
     with_login(&app, s)
 }
 
-// merges a partial update, saves it, and applies it to the window, the tray and both pages
+// merges a partial update, saves it, and applies it to the window, the tray and both pages. a shortcut that can't be
+// bound (malformed, or another app holds it) is refused and nothing is saved
 #[tauri::command]
-fn set_settings(app: AppHandle, settings: Value) {
+fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
+    if let Some(new) = settings.get("shortcut").and_then(Value::as_str) {
+        let old = app.state::<State>().settings.lock().unwrap()["shortcut"].as_str().unwrap_or("").to_string();
+        if new != old {
+            bind(&app, &old, new)?;
+        }
+    }
     let state = app.state::<State>();
     let s = {
         let mut cur = state.settings.lock().unwrap();
@@ -71,16 +86,49 @@ fn set_settings(app: AppHandle, settings: Value) {
         let auto = app.autolaunch();
         let _ = if on { auto.enable() } else { auto.disable() };
     }
-    apply(&app, &s);
+    apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
     let _ = app.emit("settings", with_login(&app, s));
+    Ok(())
 }
 
-fn apply(app: &AppHandle, s: &Value) {
+// the global show/hide shortcut, so the widget comes back even when the menu-bar icon is hidden behind the notch.
+// "" turns it off
+fn bind(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    if !old.is_empty() {
+        let _ = gs.unregister(old);
+    }
+    if new.is_empty() {
+        return Ok(());
+    }
+    gs.on_shortcut(new, |app, _, e| {
+        if e.state == ShortcutState::Pressed {
+            let visible = app.get_webview_window("main").map(|w| w.is_visible().unwrap_or(true)).unwrap_or(true);
+            show_widget(app, !visible);
+        }
+    })
+    .map_err(|e| {
+        if !old.is_empty() {
+            let _ = bind(app, "", old);
+        }
+        e.to_string()
+    })
+}
+
+// `resize`: snap to the size preset (on launch, and when the size or mode is picked); otherwise a window-mode window
+// keeps the size it was dragged to
+fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let win = app.get_webview_window("main").expect("main window");
     let on_top = s["on_top"].as_bool().unwrap_or(true);
     let size = SIZES.iter().position(|(id, _, _)| s["size"] == *id).unwrap_or(1);
     let _ = win.set_always_on_top(on_top);
-    let _ = win.set_size(LogicalSize::new(SIZES[size].2, SIZES[size].2));
+    if resize {
+        let _ = win.set_size(LogicalSize::new(SIZES[size].2, SIZES[size].2));
+    }
+    // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither
+    let windowed = s["mode"] == "window";
+    let _ = win.set_shadow(windowed);
+    let _ = win.set_resizable(windowed);
     if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
         let _ = t.top.set_checked(on_top);
         for (k, item) in t.sizes.iter().enumerate() {
@@ -111,7 +159,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     }
     let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("settings")
-        .inner_size(380.0, 660.0)
+        .inner_size(380.0, 814.0)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(true)
         .shadow(true)
@@ -131,15 +179,48 @@ fn quit(app: AppHandle) {
 
 #[tauri::command]
 fn notify(app: AppHandle, title: String, body: String) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        notes::post(title, body);
+    }
+    #[cfg(not(target_os = "macos"))]
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+// "granted", "denied", "ask" or "unavailable"
+#[tauri::command]
+async fn notify_permission() -> &'static str {
+    #[cfg(target_os = "macos")]
+    return notes::permission();
+    #[cfg(not(target_os = "macos"))]
+    "granted"
+}
+
+// asks macOS once; the answer arrives as a "permission" event
+#[tauri::command]
+fn request_notify_permission() {
+    #[cfg(target_os = "macos")]
+    notes::request(|| {});
+}
+
+// once denied, only System Settings can turn them back on
+#[tauri::command]
+fn open_notify_settings(app: AppHandle) {
+    let id = &app.config().identifier;
+    let _ = std::process::Command::new("open").arg(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}")).spawn();
+}
+
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(StateFlags::POSITION).build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
-        .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_settings, set_settings, hide_widget, open_settings, quit, notify])
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    #[cfg(not(target_os = "macos"))]
+    let app = app.plugin(tauri_plugin_notification::init());
+    app.invoke_handler(tauri::generate_handler![
+        get_settings, set_settings, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings
+    ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
@@ -148,17 +229,31 @@ fn main() {
             if let Some(saved) = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
                 merge(&mut settings, &saved);
             }
-            if ![1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
-                settings["layout"] = json!(1); // layouts 4 and 5 were dropped
+            if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
+                settings["layout"] = json!(7); // layouts 4 and 5 were dropped
             }
+            let _ = app.get_webview_window("main").expect("main window").set_title(&app.package_info().name);
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None) });
             tray(app.handle())?;
-            apply(app.handle(), &settings);
+            apply(app.handle(), &settings, true);
+            if let Err(e) = bind(app.handle(), "", settings["shortcut"].as_str().unwrap_or("")) {
+                eprintln!("show/hide shortcut not bound: {e}");
+            }
+            #[cfg(target_os = "macos")]
+            notes::init(app.handle());
             watch_pointer(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("power planet failed to start");
+        .build(tauri::generate_context!())
+        .expect("power planet failed to start")
+        .run(|app, e| {
+            // opening the app again (Finder, Spotlight, open -a) brings the widget back: no menu bar needed
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = e {
+                show_widget(app, true);
+            }
+            let _ = (app, e);
+        });
 }
 
 // an inactive window gets no mouse-moved events, so the page couldn't tell it's being hovered: tell it, 8 times a second
@@ -194,14 +289,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         .collect::<tauri::Result<Vec<_>>>()?;
     let size = Submenu::with_items(app, "Size", true, &[&sizes[0], &sizes[1], &sizes[2]])?;
     let login = CheckMenuItem::with_id(app, "login", "Launch at Login", true, false, none)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Power Planet", true, none)?;
+    let name = &app.package_info().name;
+    let quit_item = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, none)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
 
     TrayIconBuilder::with_id("tray")
         .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .icon_as_template(true)
-        .tooltip("Power Planet")
+        .tooltip(name)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
@@ -220,13 +316,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
                 "quit" => quit(app),
                 "top" => {
                     let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
-                    set_settings(app, json!({ "on_top": on }));
+                    let _ = set_settings(app, json!({ "on_top": on }));
                 }
                 "login" => {
                     let on = !app.autolaunch().is_enabled().unwrap_or(false);
-                    set_settings(app, json!({ "login": on }));
+                    let _ = set_settings(app, json!({ "login": on }));
                 }
-                size => set_settings(app, json!({ "size": size })),
+                size => {
+                    let _ = set_settings(app, json!({ "size": size }));
+                }
             }
         })
         .build(app)?;
