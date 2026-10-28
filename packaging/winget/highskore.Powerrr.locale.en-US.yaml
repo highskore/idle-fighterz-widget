@@ -6,7 +6,8 @@ Publisher: highskore
 PublisherUrl: https://highskore.com
 PackageName: Powerrr
 PackageUrl: https://github.com/highskore/powerrr
-License: Proprietary
+License: MIT
+LicenseUrl: https://github.com/highskore/powerrr/blob/main/LICENSE
 ShortDescription: Idle Dragon Ball planet game as a desktop widget
 Tags:
   - game
