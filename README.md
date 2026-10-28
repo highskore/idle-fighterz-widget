@@ -72,6 +72,7 @@ In an existing clone, `git submodule update --init` fetches the game; `git submo
 - **Menu bar**: the scouter icon with your power level beside it (1.2K, 3.4M, 5.6B, then 7.8e12), updated about once a second and only when the number changes; a setting turns the number off and leaves the icon. Its menu: show/hide, settings, always on top, size (small 300, medium 400, large 560 pt), launch at login, quit. Position and settings are kept between launches. The game isn't saved, same as on the site.
 - **Icons**: `npm run icons` renders the pixel-art dragon ball app icon and the menu-bar template icon into `src-tauri/icons/`.
 - **Native renderer** (experimental, off): a cargo feature and a hidden setting that show the game in a `CALayer` instead of the web view, for the Rust port. See [NATIVE.md](NATIVE.md).
+- **Rust core** (experimental, off): the `rust-core` cargo feature runs the game on `planet-core` in the app, behind a HUD-only page, and saves it to a file. Nothing draws the planet yet. See [NATIVE.md](NATIVE.md#the-rust-core-feature-rust-core).
 
 ## Releasing
 

@@ -63,3 +63,25 @@ The HUD is the dock pill and the other four layouts, the upgrade and ki panels, 
 2. **Native-drawn HUD**. Draw the pill and panels into the framebuffer (pixel font, as the game's sprites) or with AppKit views over the layer. One process, no WebKit at all: the WebContent, GPU and Networking processes go away, which is the remaining idle floor. But it means re-making every panel, the scroll lists, text layout and the settings window, and keeping two HUDs in step while the site still uses the HTML one.
 
 Recommendation: ship 1 first. It keeps one HUD for the site and the widget, and the measurements show the web view's idle cost is small once it isn't drawing the game. Revisit 2 only if the WebKit processes' floor (memory more than CPU) turns out to matter.
+
+## The Rust core (feature `rust-core`)
+
+Stage 5a. `planet-core` (`game/rust/planet-core`, a path dependency into the submodule) runs the game in the app, and the window shows only its HUD. Without the feature, the build is unchanged.
+
+```sh
+npm run page:hud                               # dist/index.html, then dist/hud.html from it
+npx tauri dev --features rust-core
+```
+
+- **`src-tauri/src/planet.rs`**: `Core` holds `planet_core::bridge::Bridge` in a `Mutex`. Each row of `game/rust/HUD.md`'s calls table is a `planet_<call>` command, with HUD.md's argument names (`now_ms`, `bx`, …) and its results (numbers, bools, JSON strings). Not included: `new` (the app makes the game, which outlives the page) and `spots`/`probe` (the web build's lockstep twin).
+- **The tick**: a thread steps the game at the frame-rate setting, doubled up to 60 while the pointer is over the widget (from `watch_pointer`), and 4 times a second while it's hidden. It sends each non-empty `frame()` message to the main window as a `planet` event. Nothing else calls `frame()`, so each delta reaches the page exactly once.
+- **The save**: `save()`'s text goes to `power.json` in the app data directory every 3 s of play and on exit, and is read back with `load()` at launch. Until planet-core's JSON parser has a depth limit, a save over 1 MB or nested more than 32 deep is never parsed (100 KB of `[` would overflow the stack). Each command runs inside `catch_unwind`, so a panic fails that call only, in debug builds (release builds abort on panic).
+- **The page**: `hud.js` takes the place of game.js in the widget's page (`scripts/hud.mjs` writes `dist/hud.html`, which the window loads instead of `index.html`). It's `game/rust/planet-web/shim.js` with `invoke` in place of the wasm `Planet`, and without the twin. The time and date come from the page (`Date.now()`, `toDateString()`). page.html reads the menu, angels, ascend, god ki, zeno and card info synchronously, so the page keeps the last copy of each. It refreshes them before applying a message that changed the HUD, the shop or sent a cue, and redraws an open menu after a menu button. Thumbnails and the card's pictures are blank (HUD.md: they need stage 1's sprites).
+- **The renderer's seam**: `planet::Renderer` (`draw(&Game, &mut [u8])`, RGBA8, straight alpha) is where planet-render plugs in. `planet::Frames` wraps one as a `native::FrameSource`, so the CALayer above can show it. Both are unused until stage 5b.
+
+Stage 5b (the renderer) still needs to:
+
+- implement `Renderer` with planet-render, and start `native::start` with `Frames` when both features are on;
+- keep the HUD's web view over the layer: `native::start` navigates it to `about:blank` and hides it, and the layer goes on top of it;
+- replace `hud.js`'s solid stand-in buffer with the framebuffer's alpha, so widget.js can tell empty sky (drag the window) from the planet (a press goes to the game). Until then every press goes to the game, and ⌥/⌘-press drags;
+- `thumb(id)` and the card's `spr` and `scene`, from planet-core's sprite data and a copy of the framebuffer.

@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "page": "node game/build.mjs --widget && cp settings.html dist/",
+    "page:hud": "npm run -s page && node scripts/hud.mjs",
     "icons": "node scripts/icons.mjs",
     "clouds": "node scripts/clouds.mjs",
     "dev": "npm run -s page && tauri dev",
