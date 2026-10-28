@@ -23,7 +23,6 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-const FPS: f64 = 60.0;
 
 // Core Animation objects that only the main thread touches; the loop thread just carries them there
 struct MainOnly<T>(T);
@@ -39,8 +38,8 @@ pub fn wanted(saved: &serde_json::Value) -> Option<Box<dyn FrameSource>> {
     }
 }
 
-/// takes over the main window; call on the main thread (tauri's setup)
-pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()> {
+/// takes over the main window; call on the main thread (tauri's setup). `fps` is the frame-rate setting
+pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>, fps: fn(&AppHandle) -> f64) -> tauri::Result<()> {
     let win = app.get_webview_window("main").expect("main window");
     let _ = win.navigate("about:blank".parse().unwrap()); // the game page stops: nothing runs behind the layer
     win.with_webview(|w| unsafe {
@@ -70,10 +69,15 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
         let space = CGColorSpace::new_device_rgb().expect("device RGB");
         let (w, h) = src.size();
         let mut last: Vec<u8> = Vec::new();
-        let tick = Duration::from_secs_f64(1.0 / FPS);
         let mut next = Instant::now();
-        let mut visible = true;
-        for n in 0u64..=u64::MAX {
+        let mut reported = Instant::now();
+        loop {
+            // hidden, the window shows nothing: stand still until it shows
+            if !app.state::<crate::Shown>().get() {
+                app.state::<crate::Shown>().wait();
+                next = Instant::now();
+            }
+            let tick = Duration::from_secs_f64(1.0 / fps(&app));
             next += tick;
             let now = Instant::now();
             if next > now {
@@ -81,15 +85,8 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
             } else {
                 next = now; // fell behind: don't try to catch up
             }
-            // hidden, the window shows nothing: stand still, and ask again 4 times a second
-            if n % 15 == 0 {
-                visible = win.is_visible().unwrap_or(true);
-            }
-            if !visible {
-                continue;
-            }
             let t0 = Instant::now();
-            src.step(1.0 / FPS as f32);
+            src.step(tick.as_secs_f32());
             let frame = src.frame();
             let changed = frame != last.as_slice();
             if changed {
@@ -116,7 +113,8 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
                 if changed {
                     s.changed.fetch_add(1, Ordering::Relaxed);
                 }
-                if n % (FPS as u64 * 5) == 0 && n > 0 {
+                if reported.elapsed() >= Duration::from_secs(5) {
+                    reported = Instant::now();
                     s.report();
                 }
             }
