@@ -3,7 +3,7 @@
 # notarize, ad-hoc otherwise; Windows: Authenticode, unsigned otherwise) and attaches every package plus one
 # SHA256SUMS to a GitHub Release. The secrets live in the `release` environment, which only desktop-v* tags may use,
 # and each goes only to the step that needs it (docs/RELEASING.md). Third-party actions are pinned to commits. The
-# game comes in as a public submodule (game/ → highskore/planet).
+# game comes in as a public submodule (game/ → highskore/idle-fighterz).
 name: release
 
 on:
@@ -193,6 +193,9 @@ jobs:
           if [ "${{ matrix.platform }}" = windows ]; then cp "$B"/nsis/*-setup.exe "$B"/msi/*.msi release/
           else cp "$B"/appimage/*.AppImage "$B"/deb/*.deb release/
           fi
+          # tauri names them after productName, space and all; GitHub would turn the space into a dot, and SHA256SUMS
+          # would no longer name them: IdleFighterZ_<version>_…, as scripts/release.sh names the macOS ones
+          for f in release/*; do [ "$f" = "${f// /}" ] || mv "$f" "${f// /}"; done
           ls -l release
 
       # install it the way install.ps1 does, start it, and check it's still up after a while; a second launch must hand
@@ -202,12 +205,12 @@ jobs:
         shell: powershell
         run: |
           $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
-          # Scoop unpacks this same installer with 7-Zip (packaging/scoop/powerrr.json): the app must sit at its root
+          # Scoop unpacks this same installer with 7-Zip (packaging/scoop/idle-fighterz.json): the app must sit at its root
           7z x $setup.FullName -o"$env:RUNNER_TEMP\unpacked" -y | Out-Null
-          if (-not (Test-Path "$env:RUNNER_TEMP\unpacked\powerrr.exe")) { Get-ChildItem -Recurse "$env:RUNNER_TEMP\unpacked"; throw 'no powerrr.exe at the root of the installer' }
+          if (-not (Test-Path "$env:RUNNER_TEMP\unpacked\idle-fighterz.exe")) { Get-ChildItem -Recurse "$env:RUNNER_TEMP\unpacked"; throw 'no idle-fighterz.exe at the root of the installer' }
           Start-Process $setup.FullName -ArgumentList '/S' -Wait
-          $exe = Get-ChildItem "$env:LOCALAPPDATA\Powerrr\*.exe" | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
-          if (-not $exe) { throw 'nothing installed in %LOCALAPPDATA%\Powerrr' }
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Idle FighterZ\*.exe" | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
+          if (-not $exe) { throw 'nothing installed in %LOCALAPPDATA%\Idle FighterZ' }
           "installed $($exe.FullName)"
           $p = Start-Process $exe.FullName -PassThru
           Start-Sleep 20
@@ -223,7 +226,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get install -y ./release/*.deb
-          dpkg -s powerrr | grep -E '^(Version|Depends)'
+          dpkg -s "$(dpkg-deb -f release/*.deb Package)" | grep -E '^(Package|Version|Depends)'
           APP=$(ls release/*.AppImage)
           chmod +x "$APP"
           dbus-run-session -- xvfb-run -a sh -c "\"$APP\" --appimage-extract-and-run > run.log 2>&1 & sleep 20; kill -0 \$! && kill \$!" || { cat run.log; exit 1; }
@@ -232,7 +235,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: powerrr-${{ matrix.platform }}
+          name: idle-fighterz-${{ matrix.platform }}
           path: |
             release/*.dmg
             release/*.zip
@@ -246,7 +249,7 @@ jobs:
   # copy. Here it runs as users run it (`irm … | iex` in Windows PowerShell 5.1): it must refuse an elevated shell, a
   # bad checksum, and a SHA256SUMS that is unsigned, changed after signing, signed for another release or with another
   # key (a throwaway one made here); install this build from a stand-in for its GitHub release, reinstall over the
-  # running app, and uninstall cleanly. Then it runs against the real latest release, if that has Windows assets
+  # running app, and uninstall cleanly. Then it runs against the real latest release, if that has signed Windows assets
   install-ps1:
     needs: build
     runs-on: windows-latest
@@ -257,7 +260,7 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: powerrr-windows
+          name: idle-fighterz-windows
           path: release
 
       # a release ships only what the site serves: on a tag a difference fails (and the release needs this job)
@@ -276,7 +279,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = "$env:LOCALAPPDATA\Powerrr"
+          $dir = "$env:LOCALAPPDATA\Idle FighterZ"
           $url = 'http://127.0.0.1:8765'
           $srv = Join-Path $env:RUNNER_TEMP 'srv'
           $null = New-Item -ItemType Directory $srv
@@ -295,41 +298,37 @@ jobs:
           if ($LASTEXITCODE) { throw 'minisign -G failed' }
           $testKey = (Get-Content "$k\k.pub")[1]
 
-          # the releases as GitHub's API describes them, each with a SHA256SUMS in sha256sum's format: right, wrong,
-          # signed with the test key, and signed then changed. ci-good and ci-bad stand for releases from before
-          # signing, pinned in the installers below; ci-new is a later one whose .minisig was deleted, and ci-swapped
-          # is ci-good with another SHA256SUMS
+          # the releases as GitHub's API describes them, each with a SHA256SUMS in sha256sum's format: signed with the
+          # test key, signed with a wrong hash, and signed then changed. ci-unsigned is one whose .minisig was deleted
           "$((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower())  $($setup.Name)" | Set-Content -Encoding ascii "$srv\SHA256SUMS"
           "$('0' * 64)  $($setup.Name)" | Set-Content -Encoding ascii "$srv\BADSUMS"
           Copy-Item "$srv\SHA256SUMS" "$srv\SIGNED"
-          & $ms -S -l -s "$k\k.key" -m "$srv\SIGNED" -t 'powerrr ci-signed'
+          & $ms -S -l -s "$k\k.key" -m "$srv\SIGNED" -t 'idle-fighterz ci-signed'
+          if ($LASTEXITCODE) { throw 'minisign -S failed' }
+          & $ms -S -l -s "$k\k.key" -m "$srv\BADSUMS" -t 'idle-fighterz ci-signedbad'
           if ($LASTEXITCODE) { throw 'minisign -S failed' }
           # ci-signed's signature with a second "trusted comment" after a bare CR, which Get-Content would split on
-          $m = [IO.File]::ReadAllText("$srv\SIGNED.minisig").Replace('trusted comment: powerrr ci-signed', "trusted comment: powerrr ci-signed`rtrusted comment: powerrr ci-crtrick")
+          $m = [IO.File]::ReadAllText("$srv\SIGNED.minisig").Replace('trusted comment: idle-fighterz ci-signed', "trusted comment: idle-fighterz ci-signed`rtrusted comment: idle-fighterz ci-crtrick")
           [IO.File]::WriteAllText("$srv\CRTRICK.minisig", $m)
           Copy-Item "$srv\SIGNED" "$srv\TAMPERED"
           Add-Content -Encoding ascii "$srv\TAMPERED" "$('0' * 64)  extra"
           # ci-replay serves ci-signed's SHA256SUMS and signature as its own
-          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('new', 'SHA256SUMS', ''), ('swapped', 'BADSUMS', '', 'good'), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'), ('replay', 'SIGNED', 'SIGNED.minisig'), ('crtrick', 'SIGNED', 'CRTRICK.minisig'))) {
+          foreach ($r in @(('unsigned', 'SHA256SUMS', ''), ('signed', 'SIGNED', 'SIGNED.minisig'), ('signedbad', 'BADSUMS', 'BADSUMS.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'), ('replay', 'SIGNED', 'SIGNED.minisig'), ('crtrick', 'SIGNED', 'CRTRICK.minisig'))) {
             $assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" })
             if ($r[2]) { $assets += @{ name = 'SHA256SUMS.minisig'; browser_download_url = "$url/$($r[2])" } }
-            $tag = if ($r.Count -gt 3) { $r[3] } else { $r[0] }
-            @{ tag_name = "ci-$tag"; assets = $assets } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
+            @{ tag_name = "ci-$($r[0])"; assets = $assets } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii "$srv\$($r[0]).json"
           }
 
-          # the installer with its real key, and copies with the test key, no key, and a required Authenticode signer;
-          # all of them pin ci-good and ci-bad as releases from before signing
+          # the installer with its real key, and copies with the test key, no key, and the test key plus a required
+          # Authenticode signer
           $src = Get-Content -Raw packaging\install.ps1
           $real = [regex]::Match($src, "MinisignPublicKey = '([^']*)'").Groups[1].Value
           if (-not $real) { throw "packaging/install.ps1 has no MinisignPublicKey" }
-          $legacy = [regex]::Match($src, '\$LegacySums = @\{[^}]*\}').Value
-          if (-not $legacy) { throw "packaging/install.ps1 has no LegacySums" }
-          $pins = "`$LegacySums = @{ 'ci-good' = '$((Get-FileHash "$srv\SHA256SUMS").Hash)'; 'ci-bad' = '$((Get-FileHash "$srv\BADSUMS").Hash)' }"
-          $src = $src.Replace($legacy, $pins)
+          $test = $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = '$testKey'")
           $src | Set-Content -Encoding ascii "$srv\install.ps1"
-          $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = '$testKey'") | Set-Content -Encoding ascii "$srv\install-test.ps1"
+          $test | Set-Content -Encoding ascii "$srv\install-test.ps1"
           $src.Replace("MinisignPublicKey = '$real'", "MinisignPublicKey = ''") | Set-Content -Encoding ascii "$srv\install-nokey.ps1"
-          $src.Replace("SignerSubject = ''", "SignerSubject = 'CN=Nobody'") | Set-Content -Encoding ascii "$srv\install-signer.ps1"
+          $test.Replace("SignerSubject = ''", "SignerSubject = 'CN=Nobody'") | Set-Content -Encoding ascii "$srv\install-signer.ps1"
 
           # Vercel serves install.ps1 as application/octet-stream; so does this
           @'
@@ -339,7 +338,7 @@ jobs:
           http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(H, directory=sys.argv[1])).serve_forever()
           '@ | Set-Content -Encoding ascii "$env:RUNNER_TEMP\serve.py"
           $server = Start-Process python -ArgumentList "`"$env:RUNNER_TEMP\serve.py`"", "`"$srv`"" -PassThru -WindowStyle Hidden
-          for ($i = 0; ; $i++) { try { $null = Invoke-WebRequest "$url/good.json" -UseBasicParsing; break } catch { if ($i -gt 30) { throw } Start-Sleep 1 } }
+          for ($i = 0; ; $i++) { try { $null = Invoke-WebRequest "$url/signed.json" -UseBasicParsing; break } catch { if ($i -gt 30) { throw } Start-Sleep 1 } }
 
           # a fresh Windows PowerShell, as from the README; its exit code and everything it printed
           function Run-Install($cmd) {
@@ -349,77 +348,75 @@ jobs:
             @{ code = $LASTEXITCODE; out = $out }
           }
           function Refused($script, $release, $why, $what) {
-            $env:POWERRR_RELEASE = "$url/$release.json"
+            $env:IDLE_FIGHTERZ_RELEASE = "$url/$release.json"
             $r = Run-Install "irm $url/$script | iex"
             if ($r.code -eq 0 -or $r.out -notmatch $why) { throw "$what wasn't refused (exit $($r.code))" }
-            if (Test-Path "$dir\powerrr.exe") { throw "installed despite: $what" }
+            if (Test-Path "$dir\idle-fighterz.exe") { throw "installed despite: $what" }
             "ok: $what is refused"
           }
-          function Registered { [bool](Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -eq 'Powerrr') }
+          function Registered { [bool](Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -eq 'Idle FighterZ') }
           function Uninstall {
-            Get-Process powerrr -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process idle-fighterz -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep 2
             $un = Get-ChildItem "$dir\uninstall*.exe" | Select-Object -First 1
             if (-not $un) { throw "no uninstaller in $dir" }
             Start-Process $un.FullName -ArgumentList '/S' -Wait
             # NSIS's uninstaller copies itself to %TEMP% and returns at once: wait for the files to go
-            for ($i = 0; $i -lt 60 -and (Test-Path "$dir\powerrr.exe"); $i++) { Start-Sleep 1 }
-            if (Test-Path "$dir\powerrr.exe") { throw 'the uninstaller left powerrr.exe' }
+            for ($i = 0; $i -lt 60 -and (Test-Path "$dir\idle-fighterz.exe"); $i++) { Start-Sleep 1 }
+            if (Test-Path "$dir\idle-fighterz.exe") { throw 'the uninstaller left idle-fighterz.exe' }
             if (Registered) { throw 'the uninstaller left its entry in Apps' }
             'uninstalled'
           }
 
-          '--- an elevated shell is refused unless POWERRR_ALLOW_ADMIN=1 (the runner is elevated)'
+          '--- an elevated shell is refused unless IDLE_FIGHTERZ_ALLOW_ADMIN=1 (the runner is elevated)'
           $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          if ($admin) { Refused 'install.ps1' 'good' 'elevated' 'an elevated shell' } else { '::notice::the runner is not elevated: skipped the elevated-shell check' }
-          $env:POWERRR_ALLOW_ADMIN = '1'
+          if ($admin) { Refused 'install-test.ps1' 'signed' 'elevated' 'an elevated shell' } else { '::notice::the runner is not elevated: skipped the elevated-shell check' }
+          $env:IDLE_FIGHTERZ_ALLOW_ADMIN = '1'
 
           '--- refusals: nothing is installed'
-          Refused 'install.ps1' 'bad' 'sha256 mismatch' 'a wrong sha256'
-          Refused 'install.ps1' 'new' 'no SHA256SUMS.minisig' 'a later release without a .minisig'
-          Refused 'install.ps1' 'swapped' "isn't the one it was released with" 'a changed SHA256SUMS on a release from before signing'
+          Refused 'install-test.ps1' 'signedbad' 'sha256 mismatch' 'a wrong sha256 under a good signature'
+          Refused 'install-test.ps1' 'unsigned' 'no SHA256SUMS.minisig' 'a release without a .minisig'
           Refused 'install-test.ps1' 'tampered' "doesn't verify" 'a SHA256SUMS changed after signing'
           Refused 'install-test.ps1' 'crtrick' 'malformed' 'a .minisig with a bare CR'
-          Refused 'install-test.ps1' 'replay' "was signed for 'powerrr ci-signed', not 'powerrr ci-replay'" "another release's signed SHA256SUMS"
+          Refused 'install-test.ps1' 'replay' "was signed for 'idle-fighterz ci-signed', not 'idle-fighterz ci-replay'" "another release's signed SHA256SUMS"
           Refused 'install.ps1' 'signed' 'another key' 'a SHA256SUMS signed with another key'
           Refused 'install-nokey.ps1' 'signed' 'no key to check it with' 'a signed SHA256SUMS with no key in the installer'
-          Refused 'install-signer.ps1' 'good' "isn't validly signed" 'an installer without the required Authenticode signer'
+          Refused 'install-signer.ps1' 'signed' "isn't validly signed" 'an installer without the required Authenticode signer'
 
-          '--- a release from before signing installs and starts, with a note'
-          $env:POWERRR_RELEASE = "$url/good.json"
-          $r = Run-Install "irm $url/install.ps1 | iex"
+          '--- a signed release installs and starts'
+          $env:IDLE_FIGHTERZ_RELEASE = "$url/signed.json"
+          $r = Run-Install "irm $url/install-test.ps1 | iex"
           if ($r.code -ne 0) { throw "install.ps1 failed (exit $($r.code))" }
-          if ($r.out -notmatch 'unsigned checksums') { throw 'no unsigned checksums note' }
-          if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
+          if ($r.out -notmatch 'SHA256SUMS signature ok') { throw 'the signature was not checked' }
+          if (-not (Test-Path "$dir\idle-fighterz.exe")) { throw "no idle-fighterz.exe in $dir" }
           if (-not (Registered)) { throw 'not in Apps' }
           Start-Sleep 15
-          $first = @(Get-Process powerrr -ErrorAction SilentlyContinue)
-          if ($first.Count -ne 1) { throw "expected one powerrr running, found $($first.Count)" }
+          $first = @(Get-Process idle-fighterz -ErrorAction SilentlyContinue)
+          if ($first.Count -ne 1) { throw "expected one idle-fighterz running, found $($first.Count)" }
 
-          '--- a signed release installs over the running app'
-          $env:POWERRR_RELEASE = "$url/signed.json"
+          '--- it installs again over the running app'
           $r = Run-Install "irm $url/install-test.ps1 | iex"
           if ($r.code -ne 0) { throw "reinstalling failed (exit $($r.code))" }
           if ($r.out -notmatch 'SHA256SUMS signature ok') { throw 'the signature was not checked' }
           Start-Sleep 15
-          $now = @(Get-Process powerrr -ErrorAction SilentlyContinue)
-          if ($now.Count -ne 1 -or $now[0].Id -eq $first[0].Id) { throw "expected a new powerrr running, found $($now.Id -join ', ') (was $($first[0].Id))" }
+          $now = @(Get-Process idle-fighterz -ErrorAction SilentlyContinue)
+          if ($now.Count -ne 1 -or $now[0].Id -eq $first[0].Id) { throw "expected a new idle-fighterz running, found $($now.Id -join ', ') (was $($first[0].Id))" }
 
           '--- uninstall'
           Uninstall
           Stop-Process $server.Id
 
-          '--- the latest release, if it has Windows assets'
+          '--- the latest release, if it has signed Windows assets'
           $latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" | ConvertFrom-Json
-          if (($latest.assets.name -like '*_x64-setup.exe') -and ($latest.assets.name -contains 'SHA256SUMS')) {
-            Remove-Item Env:POWERRR_RELEASE
-            $env:POWERRR_REPO = $env:GITHUB_REPOSITORY
+          if (($latest.assets.name -like '*_x64-setup.exe') -and ($latest.assets.name -contains 'SHA256SUMS') -and ($latest.assets.name -contains 'SHA256SUMS.minisig')) {
+            Remove-Item Env:IDLE_FIGHTERZ_RELEASE
+            $env:IDLE_FIGHTERZ_REPO = $env:GITHUB_REPOSITORY
             $r = Run-Install 'Get-Content -Raw packaging\install.ps1 | iex'
             if ($r.code -ne 0) { throw "install.ps1 failed on $($latest.tag_name) (exit $($r.code))" }
-            if (-not (Test-Path "$dir\powerrr.exe")) { throw "no powerrr.exe in $dir" }
+            if (-not (Test-Path "$dir\idle-fighterz.exe")) { throw "no idle-fighterz.exe in $dir" }
             Uninstall
           } else {
-            "::notice::skipped the latest release: $($latest.tag_name) has no Windows installer and SHA256SUMS (this run's installer was tested above)"
+            "::notice::skipped the latest release: $($latest.tag_name) has no Windows installer, SHA256SUMS and SHA256SUMS.minisig (this run's installer was tested above)"
           }
           exit 0 # a PowerShell step ends with $LASTEXITCODE, which an expected install.ps1 failure may have left at 1
 
@@ -442,7 +439,7 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: powerrr-${{ matrix.platform }}
+          name: idle-fighterz-${{ matrix.platform }}
           path: release
 
       - name: the copy matches highskore.com
@@ -513,7 +510,7 @@ jobs:
           esac > "$KEY")
           unset MINISIGN_SECRET_KEY
           # -l: the legacy format, Ed25519 over the file itself, which the installers verify without minisign
-          printf '%s\n' "$MINISIGN_PASSWORD" | "$MS" -S -l -s "$KEY" -m release/SHA256SUMS -t "powerrr $GITHUB_REF_NAME"
+          printf '%s\n' "$MINISIGN_PASSWORD" | "$MS" -S -l -s "$KEY" -m release/SHA256SUMS -t "idle-fighterz $GITHUB_REF_NAME"
           PUB=$(sed -n "s/^MINISIGN_PUBKEY='\(.*\)'$/\1/p" packaging/install.sh)
           "$MS" -V -P "$PUB" -m release/SHA256SUMS
           cat release/SHA256SUMS.minisig

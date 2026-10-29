@@ -1,15 +1,14 @@
-# Powerrr installer for Windows: irm https://highskore.com/install.ps1 | iex
-# Downloads the latest release from github.com/highskore/powerrr, checks its sha256 against SHA256SUMS, runs the
-# per-user installer silently (no admin; it goes to %LOCALAPPDATA%\Powerrr) and starts the app. A download made here
-# carries no mark-of-the-web, so SmartScreen doesn't stop an unsigned build. POWERRR_REPO picks another repo, and
-# POWERRR_RELEASE (a release's API URL) a release other than the latest: powerrr's CI points it at the build under test.
-# It refuses to run elevated (the app would install for, and run as, the admin) unless POWERRR_ALLOW_ADMIN=1.
+# Idle FighterZ installer for Windows: irm https://highskore.com/install.ps1 | iex
+# Downloads the latest release from github.com/highskore/idle-fighterz-widget, checks its sha256 against SHA256SUMS, runs the
+# per-user installer silently (no admin; it goes to %LOCALAPPDATA%\Idle FighterZ) and starts the app. A download made here
+# carries no mark-of-the-web, so SmartScreen doesn't stop an unsigned build. IDLE_FIGHTERZ_REPO picks another repo, and
+# IDLE_FIGHTERZ_RELEASE (a release's API URL) a release other than the latest: idle-fighterz-widget's CI points it at the build under test.
+# It refuses to run elevated (the app would install for, and run as, the admin) unless IDLE_FIGHTERZ_ALLOW_ADMIN=1.
 #
 # A release's SHA256SUMS is signed with minisign (SHA256SUMS.minisig) by the release workflow, and checked here with
 # the Ed25519 verification below, so nothing needs installing. A signed release that doesn't verify is refused, and so
-# is an unsigned one, except the releases from before signing, listed below with their SHA256SUMS pinned. Once builds
-# are Authenticode-signed, the publisher below is checked too.
-# This file is served by highskore.com and kept as a copy in powerrr's packaging/install.ps1: change both.
+# is an unsigned one. Once builds are Authenticode-signed, the publisher below is checked too.
+# This file is served by highskore.com and kept as a copy in idle-fighterz-widget's packaging/install.ps1: change both.
 & {
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'   # Windows PowerShell's progress bar slows downloads to a crawl
@@ -17,18 +16,16 @@
 
   # the minisign public key that signs SHA256SUMS (minisign.pub's second line)
   $MinisignPublicKey = 'RWQsYREKR+Av/TIhq7yrFboAERzsd4eoUxepZrikLPg8/hrtXm7MvY1C'
-  # the releases from before SHA256SUMS was signed, each with the sha256 of its SHA256SUMS: only these install unsigned
-  $LegacySums = @{ 'desktop-v0.1.1' = 'dc73874f6220409f6b9443337c6a8f77b38713eb8e4ecb9530908eeaaf735ffd' }
   # the Authenticode signer of the installer, once builds are signed: its certificate's thumbprint and/or subject
   # (e.g. 'CN=Your Name, O=Your Name, L=City, C=XX'). Empty: not checked
   $SignerThumbprint = ''
   $SignerSubject = ''
 
-  $repo = if ($env:POWERRR_REPO) { $env:POWERRR_REPO } else { 'highskore/powerrr' }
+  $repo = if ($env:IDLE_FIGHTERZ_REPO) { $env:IDLE_FIGHTERZ_REPO } else { 'highskore/idle-fighterz-widget' }
   if (-not [Environment]::Is64BitOperatingSystem) { throw 'install: there is only an x64 build' }
   $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  if ($admin -and $env:POWERRR_ALLOW_ADMIN -ne '1') {
-    throw 'install: this is an elevated (admin) PowerShell. Powerrr installs for your user only: run this from a normal PowerShell, or set $env:POWERRR_ALLOW_ADMIN = 1 to install for this admin account anyway'
+  if ($admin -and $env:IDLE_FIGHTERZ_ALLOW_ADMIN -ne '1') {
+    throw 'install: this is an elevated (admin) PowerShell. Idle FighterZ installs for your user only: run this from a normal PowerShell, or set $env:IDLE_FIGHTERZ_ALLOW_ADMIN = 1 to install for this admin account anyway'
   }
 
   # Ed25519 verification (RFC 8032): S < L, and [S]B - [k]A encodes to R, where k = SHA-512(R || A || message).
@@ -100,37 +97,31 @@
     return $null
   }
 
-  $api = if ($env:POWERRR_RELEASE) { $env:POWERRR_RELEASE } else { "https://api.github.com/repos/$repo/releases/latest" }
+  $api = if ($env:IDLE_FIGHTERZ_RELEASE) { $env:IDLE_FIGHTERZ_RELEASE } else { "https://api.github.com/repos/$repo/releases/latest" }
   Write-Host "finding the release at $api..."
-  $release = Invoke-RestMethod $api -Headers @{ 'User-Agent' = 'powerrr-install' }
+  $release = Invoke-RestMethod $api -Headers @{ 'User-Agent' = 'idle-fighterz-install' }
   $setup = $release.assets | Where-Object name -like '*_x64-setup.exe' | Select-Object -First 1
   $sums = $release.assets | Where-Object name -eq 'SHA256SUMS' | Select-Object -First 1
   $minisig = $release.assets | Where-Object name -eq 'SHA256SUMS.minisig' | Select-Object -First 1
   if (-not $setup -or -not $sums) { throw "install: release $($release.tag_name) has no Windows installer or SHA256SUMS" }
 
-  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("powerrr-" + [Guid]::NewGuid())
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("idle-fighterz-" + [Guid]::NewGuid())
   New-Item -ItemType Directory $tmp | Out-Null
   try {
     $file = Join-Path $tmp $setup.name
     Write-Host "downloading $($setup.name)..."
     Invoke-WebRequest $setup.browser_download_url -OutFile $file -UseBasicParsing
     Invoke-WebRequest $sums.browser_download_url -OutFile "$tmp\SHA256SUMS" -UseBasicParsing
-    if ($minisig) {
-      if (-not $MinisignPublicKey) { throw "install: this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing" }
-      Invoke-WebRequest $minisig.browser_download_url -OutFile "$tmp\SHA256SUMS.minisig" -UseBasicParsing
-      $comment = Test-Minisign ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS")) ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS.minisig")) $MinisignPublicKey
-      if ($null -eq $comment) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
-      # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
-      # signature, served as a newer one, are refused
-      if ($comment -cne "powerrr $($release.tag_name)") { throw "install: SHA256SUMS was signed for '$comment', not 'powerrr $($release.tag_name)': not installing" }
-      Write-Host "SHA256SUMS signature ok ($($release.tag_name))"
-    } else {
-      # without this, deleting the .minisig would turn any release back into an unsigned one
-      $tag = [string]$release.tag_name
-      if (-not $LegacySums.ContainsKey($tag)) { throw "install: release $tag has no SHA256SUMS.minisig, though releases are signed: not installing" }
-      if ((Get-FileHash "$tmp\SHA256SUMS" -Algorithm SHA256).Hash -ne $LegacySums[$tag]) { throw "install: SHA256SUMS of $tag isn't the one it was released with: not installing" }
-      Write-Host "note: unsigned checksums: $tag is from before releases were signed; its SHA256SUMS matches the copy pinned in this installer"
-    }
+    # every release is signed: deleting the .minisig must not turn one back into an unsigned one
+    if (-not $minisig) { throw "install: release $($release.tag_name) has no SHA256SUMS.minisig, though releases are signed: not installing" }
+    if (-not $MinisignPublicKey) { throw "install: this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing" }
+    Invoke-WebRequest $minisig.browser_download_url -OutFile "$tmp\SHA256SUMS.minisig" -UseBasicParsing
+    $comment = Test-Minisign ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS")) ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS.minisig")) $MinisignPublicKey
+    if ($null -eq $comment) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
+    # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
+    # signature, served as a newer one, are refused
+    if ($comment -cne "idle-fighterz $($release.tag_name)") { throw "install: SHA256SUMS was signed for '$comment', not 'idle-fighterz $($release.tag_name)': not installing" }
+    Write-Host "SHA256SUMS signature ok ($($release.tag_name))"
     $want = Get-Content "$tmp\SHA256SUMS" |
       ForEach-Object { $h, $n = $_.Trim() -split '\s+\*?', 2; if ($n -eq $setup.name) { $h } } | Select-Object -First 1
     $got = (Get-FileHash $file -Algorithm SHA256).Hash
@@ -147,11 +138,11 @@
       Write-Host "signed by $($auth.SignerCertificate.Subject)"
     }
 
-    $dir = Join-Path $env:LOCALAPPDATA 'Powerrr'
+    $dir = Join-Path $env:LOCALAPPDATA 'Idle FighterZ'
     Get-Process | Where-Object { $_.Path -like "$dir\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     $run = Start-Process $file -ArgumentList '/S' -Wait -PassThru
     if ($run.ExitCode -ne 0) { throw "install: the installer exited with $($run.ExitCode)" }
-    $exe = Join-Path $dir 'powerrr.exe'
+    $exe = Join-Path $dir 'idle-fighterz.exe'
     if (-not (Test-Path $exe)) { throw "install: the installer ran, but there's no $exe" }
     Write-Host "installed $exe"
     Start-Process $exe
