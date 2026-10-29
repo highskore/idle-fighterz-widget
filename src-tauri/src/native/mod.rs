@@ -1,10 +1,15 @@
 // The native renderer (cargo feature `native-renderer`, then `"native_renderer": "planet"` or `"pattern"` in
 // settings.json): the main window's web view is emptied and hidden, and a CALayer in its place shows a FrameSource's
 // framebuffer. Core Animation scales it on the GPU, nearest-neighbour by a whole factor, with its alpha over the
-// wallpaper; a new image goes up only when the frame changed. See NATIVE.md.
+// wallpaper; a new image goes up only when the frame changed. With rust-core too, `"native_renderer": "core"` shows
+// the game planet-render draws in a layer under the HUD page instead (`Under`). See NATIVE.md.
 mod source;
+#[cfg(feature = "rust-core")]
+mod under;
 
 pub use source::{FrameSource, PngLoop, TestPattern};
+#[cfg(feature = "rust-core")]
+pub use under::Under;
 
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};

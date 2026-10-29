@@ -1730,6 +1730,7 @@ dependencies = [
  "objc2-quartz-core",
  "objc2-user-notifications",
  "planet-core",
+ "planet-render",
  "png",
  "serde_json",
  "tauri",
@@ -2637,6 +2638,13 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "planet-core"
 version = "0.1.0"
+
+[[package]]
+name = "planet-render"
+version = "0.1.0"
+dependencies = [
+ "planet-core",
+]
 
 [[package]]
 name = "plist"
