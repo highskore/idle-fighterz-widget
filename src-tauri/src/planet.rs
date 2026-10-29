@@ -177,6 +177,12 @@ impl Core {
         let _ = self.surface.set(s);
     }
 
+    /// Time banked towards the next step, while drawing (the tick paces itself by it).
+    fn bank(&self) -> Option<f64> {
+        let p = self.paint();
+        p.on.then_some(p.bank)
+    }
+
     fn paint(&self) -> std::sync::MutexGuard<'_, Paint> {
         self.paint.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -381,9 +387,12 @@ pub fn run(app: AppHandle, hooks: Hooks) {
             }
             if shown.get() {
                 let fps = Some(*core.fps.lock().unwrap()).filter(|f| *f > 0.0).unwrap_or_else(|| (hooks.idle_fps)(&app));
-                // the game steps 30 times a second: a faster tick would find nothing new every other time
-                let fps = fps.min(1.0 / DT);
-                std::thread::sleep(Duration::from_secs_f64(1.0 / fps));
+                // the game steps 30 times a second: a faster tick would find nothing new every other time. Drawn, the
+                // tick wakes half a step after its last step is due, so a late wake still finds it and an early one
+                // doesn't find the next: every tick draws
+                let steps = (1.0 / (fps * DT)).round().max(1.0);
+                let wait = core.bank().map_or(steps * DT, |bank| steps * DT - bank + DT / 2.0);
+                std::thread::sleep(Duration::from_secs_f64(wait.clamp(0.0, 1.0)));
                 let now = Instant::now();
                 let elapsed = (now - last).as_secs_f64();
                 last = now;
