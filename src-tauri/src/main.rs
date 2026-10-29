@@ -478,6 +478,11 @@ fn main() {
             #[cfg(feature = "rust-core")]
             {
                 app.manage(planet::Core::new(planet::seed(), app.path().app_data_dir()?.join("power.json")));
+                // a hidden setting, as below: the frames in a layer under the page rather than on its canvas
+                #[cfg(all(target_os = "macos", feature = "native-renderer"))]
+                if saved.as_ref().and_then(|s| s.get("native_renderer")?.as_str()) == Some("core") {
+                    app.state::<planet::Core>().set_surface(Box::new(native::Under::new(app.handle())?));
+                }
                 main.navigate(main.url()?.join("hud.html")?)?;
                 planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
             }
@@ -811,7 +816,7 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "planet_start", "planet_buy", "planet_fps"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
         for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "planet_step", "planet_load", "planet_save"] {
@@ -820,7 +825,7 @@ mod tests {
         for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "planet_start", "planet_buy", "planet_fps"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
         }
     }

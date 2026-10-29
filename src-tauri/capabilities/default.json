@@ -36,6 +36,12 @@
     "allow-planet-god-info",
     "allow-planet-zeno-info",
     "allow-planet-card",
-    "allow-planet-fps"
+    "allow-planet-fps",
+    "allow-planet-itx",
+    "allow-planet-itx-jump",
+    "allow-planet-view",
+    "allow-planet-pixels",
+    "allow-planet-mask",
+    "allow-planet-sprite"
   ]
 }
