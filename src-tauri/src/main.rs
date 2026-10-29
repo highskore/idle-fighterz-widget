@@ -346,6 +346,8 @@ fn plays_hidden(app: &AppHandle) -> bool {
 // a hidden catch-up of the game on the Rust core: the menu-bar power level and notifications, as widget.js would
 #[cfg(feature = "rust-core")]
 fn hidden_tick(app: &AppHandle, caught: planet::Caught) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| smoke("hidden: the core plays on"));
     let s = app.state::<State>().settings.lock().unwrap().clone();
     let power = planet::short(caught.pl);
     if s["menubar_power"].as_bool().unwrap_or(true) && *app.state::<State>().power.lock().unwrap() != power {
@@ -433,6 +435,14 @@ fn open_notify_settings(app: AppHandle) {
 }
 
 fn main() {
+    // release builds abort on a panic, with no console on Windows: the smoke log says where
+    if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            smoke(&format!("panic: {info}"));
+            default(info);
+        }));
+    }
     let app = tauri::Builder::default().manage(Shown::new());
     // macOS reopens the running app itself (RunEvent::Reopen below); elsewhere a second launch would be a second
     // widget and a second tray icon, so it shows the first one's widget instead and exits
@@ -474,16 +484,25 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
-            // the game runs here, and the window shows only its HUD (dist/hud.html, npm run page:hud)
+            // the game runs here, and the window shows only its HUD (dist/hud.html). IDLE_FIGHTERZ_ENGINE=web keeps 0.1's
+            // game.js in the page (index.html); =canvas keeps the frames on the page's canvas on macOS too
             #[cfg(feature = "rust-core")]
-            {
+            if std::env::var("IDLE_FIGHTERZ_ENGINE").as_deref() == Ok("web") {
+                eprintln!("engine: game.js in the web view (IDLE_FIGHTERZ_ENGINE=web)");
+            } else {
                 app.manage(planet::Core::new(planet::seed(), app.path().app_data_dir()?.join("power.json")));
-                // a hidden setting, as below: the frames in a layer under the page rather than on its canvas
                 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
-                if saved.as_ref().and_then(|s| s.get("native_renderer")?.as_str()) == Some("core") {
-                    app.state::<planet::Core>().set_surface(Box::new(native::Under::new(app.handle())?));
+                if std::env::var("IDLE_FIGHTERZ_ENGINE").as_deref() != Ok("canvas") {
+                    // floating, the frames go in a layer under the page; window mode, or if the layer fails, on its canvas
+                    match native::Under::new(app.handle()) {
+                        Ok(u) => app.state::<planet::Core>().set_surface(Box::new(u)),
+                        Err(e) => eprintln!("engine: no layer under the page ({e})"),
+                    }
                 }
-                main.navigate(main.url()?.join("hud.html")?)?;
+                eprintln!("engine: the Rust core, behind the HUD page");
+                smoke("engine: the Rust core");
+                let https = app.config().app.windows.iter().any(|w| w.label == "main" && w.use_https_scheme);
+                main.navigate(hud_url(&main.url()?, https))?;
                 planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
             }
             if !wayland {
@@ -514,11 +533,25 @@ fn main() {
                 show_widget(app, true);
             }
             #[cfg(feature = "rust-core")]
-            if let tauri::RunEvent::Exit = e {
-                app.state::<planet::Core>().stop(); // the tick thread saves no more after this
+            if let (tauri::RunEvent::Exit, Some(core)) = (&e, app.try_state::<planet::Core>()) {
+                core.stop(); // the tick thread saves no more after this
             }
             let _ = (app, e);
         });
+}
+
+// hud.html beside the page the window loads. At setup on Windows the web view is still on about:blank, which nothing
+// joins onto: there it goes on the app's own origin, tauri's protocol as WebviewUrl::App resolves it
+#[cfg(feature = "rust-core")]
+fn hud_url(page: &tauri::Url, https: bool) -> tauri::Url {
+    page.join("hud.html").unwrap_or_else(|_| {
+        let origin = match (cfg!(any(windows, target_os = "android")), https) {
+            (true, false) => "http://tauri.localhost/",
+            (true, true) => "https://tauri.localhost/",
+            (false, _) => "tauri://localhost/",
+        };
+        tauri::Url::parse(origin).and_then(|u| u.join("hud.html")).expect("a fixed URL")
+    })
 }
 
 // the frame-rate setting: 15, 30 (the default) or 60
@@ -774,6 +807,20 @@ mod tests {
         webview::InvokeRequest,
         WebviewUrl, WebviewWindowBuilder,
     };
+
+    // Windows has the web view on about:blank at setup: hud.html then goes on the app's origin, not nowhere (0.2.0's
+    // first Windows smoke run aborted on that join)
+    #[cfg(feature = "rust-core")]
+    #[test]
+    fn the_hud_page_has_a_url_before_the_page_loads() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        assert_eq!(super::hud_url(&url("tauri://localhost/"), false), url("tauri://localhost/hud.html"));
+        assert_eq!(super::hud_url(&url("http://tauri.localhost/index.html"), false), url("http://tauri.localhost/hud.html"));
+        assert_eq!(super::hud_url(&url("http://localhost:1420/"), false), url("http://localhost:1420/hud.html"));
+        let blank = if cfg!(windows) { ["http://tauri.localhost/hud.html", "https://tauri.localhost/hud.html"] } else { ["tauri://localhost/hud.html"; 2] };
+        assert_eq!(super::hud_url(&url("about:blank"), false), url(blank[0]));
+        assert_eq!(super::hud_url(&url("about:blank"), true), url(blank[1]));
+    }
 
     // a settings.json as 0.1.1 saved it: its keys carry over, the ones added since get their defaults, layout 4 is gone
     #[test]
