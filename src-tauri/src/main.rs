@@ -501,7 +501,8 @@ fn main() {
                 }
                 eprintln!("engine: the Rust core, behind the HUD page");
                 smoke("engine: the Rust core");
-                main.navigate(main.url()?.join("hud.html")?)?;
+                let https = app.config().app.windows.iter().any(|w| w.label == "main" && w.use_https_scheme);
+                main.navigate(hud_url(&main.url()?, https))?;
                 planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
             }
             if !wayland {
@@ -537,6 +538,20 @@ fn main() {
             }
             let _ = (app, e);
         });
+}
+
+// hud.html beside the page the window loads. At setup on Windows the web view is still on about:blank, which nothing
+// joins onto: there it goes on the app's own origin, tauri's protocol as WebviewUrl::App resolves it
+#[cfg(feature = "rust-core")]
+fn hud_url(page: &tauri::Url, https: bool) -> tauri::Url {
+    page.join("hud.html").unwrap_or_else(|_| {
+        let origin = match (cfg!(any(windows, target_os = "android")), https) {
+            (true, false) => "http://tauri.localhost/",
+            (true, true) => "https://tauri.localhost/",
+            (false, _) => "tauri://localhost/",
+        };
+        tauri::Url::parse(origin).and_then(|u| u.join("hud.html")).expect("a fixed URL")
+    })
 }
 
 // the frame-rate setting: 15, 30 (the default) or 60
@@ -792,6 +807,20 @@ mod tests {
         webview::InvokeRequest,
         WebviewUrl, WebviewWindowBuilder,
     };
+
+    // Windows has the web view on about:blank at setup: hud.html then goes on the app's origin, not nowhere (0.2.0's
+    // first Windows smoke run aborted on that join)
+    #[cfg(feature = "rust-core")]
+    #[test]
+    fn the_hud_page_has_a_url_before_the_page_loads() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        assert_eq!(super::hud_url(&url("tauri://localhost/"), false), url("tauri://localhost/hud.html"));
+        assert_eq!(super::hud_url(&url("http://tauri.localhost/index.html"), false), url("http://tauri.localhost/hud.html"));
+        assert_eq!(super::hud_url(&url("http://localhost:1420/"), false), url("http://localhost:1420/hud.html"));
+        let blank = if cfg!(windows) { ["http://tauri.localhost/hud.html", "https://tauri.localhost/hud.html"] } else { ["tauri://localhost/hud.html"; 2] };
+        assert_eq!(super::hud_url(&url("about:blank"), false), url(blank[0]));
+        assert_eq!(super::hud_url(&url("about:blank"), true), url(blank[1]));
+    }
 
     // a settings.json as 0.1.1 saved it: its keys carry over, the ones added since get their defaults, layout 4 is gone
     #[test]
