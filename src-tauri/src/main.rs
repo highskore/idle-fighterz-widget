@@ -35,6 +35,9 @@ const DEFAULTS: &str = r#"{
 #[cfg(not(target_os = "macos"))]
 const SHORTCUT: &str = "Ctrl+Alt+KeyP"; // Win+Alt+P / Super+Alt+P belong to the desktop; ⌥⌘P stays the macOS default
 
+// menu handles, cloned out of `State::tray` before any call on them: off the main thread a menu call waits for the main
+// thread, which may be waiting for that lock (on Linux the shortcut and second-launch callbacks run off it)
+#[derive(Clone)]
 struct Tray {
     show: MenuItem<Wry>,
     top: CheckMenuItem<Wry>,
@@ -54,6 +57,22 @@ struct State {
     transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
     wayland: bool,        // no global shortcut and no pointer polling there
     tray_nudge: Mutex<Option<Sender<()>>>, // wakes the tray icon's watcher (Windows, Linux) when settings change
+}
+
+// the defaults with a saved file over them
+fn initial_settings(saved: Option<&Value>) -> Value {
+    let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings["shortcut"] = json!(SHORTCUT);
+    }
+    if let Some(saved) = saved {
+        merge(&mut settings, saved);
+    }
+    if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
+        settings["layout"] = json!(7); // layouts 4 and 5 were dropped
+    }
+    settings
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -111,6 +130,12 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         let _ = if on { auto.enable() } else { auto.disable() };
     }
     apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
+    // only a new pick: on Linux every check is a D-Bus call, and a slider drag sends a burst of updates
+    if settings.get("tray_icon").is_some() {
+        if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
+            let _ = nudge.send(());
+        }
+    }
     let _ = app.emit("settings", with_login(&app, s));
     Ok(())
 }
@@ -153,15 +178,13 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let windowed = s["mode"] == "window" || !app.state::<State>().transparent;
     let _ = win.set_shadow(windowed);
     let _ = win.set_resizable(windowed);
-    if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
+    let tray = app.state::<State>().tray.lock().unwrap().clone();
+    if let Some(t) = tray {
         let _ = t.top.set_checked(on_top);
         for (k, item) in t.sizes.iter().enumerate() {
             let _ = item.set_checked(k == size);
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
-    }
-    if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
-        let _ = nudge.send(());
     }
     show_power(app, s);
 }
@@ -209,8 +232,9 @@ fn tray_title(app: AppHandle, text: String) {
 fn show_widget(app: &AppHandle, show: bool) {
     let win = app.get_webview_window("main").expect("main window");
     let _ = if show { win.show() } else { win.hide() }; // hidden, the page gets no animation frames and stops drawing
-    if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
-        let _ = t.show.set_text(if show { "Hide Planet" } else { "Show Planet" });
+    let item = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.show.clone());
+    if let Some(item) = item {
+        let _ = item.set_text(if show { "Hide Planet" } else { "Show Planet" });
     }
 }
 
@@ -308,18 +332,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
             let file = app.path().app_config_dir()?.join("settings.json");
-            let mut settings: Value = serde_json::from_str(DEFAULTS).unwrap();
-            #[cfg(not(target_os = "macos"))]
-            {
-                settings["shortcut"] = json!(SHORTCUT);
-            }
             let saved = fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-            if let Some(saved) = &saved {
-                merge(&mut settings, saved);
-            }
-            if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
-                settings["layout"] = json!(7); // layouts 4 and 5 were dropped
-            }
+            let settings = initial_settings(saved.as_ref());
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
@@ -364,7 +378,7 @@ fn main() {
             }
             #[cfg(feature = "rust-core")]
             if let tauri::RunEvent::Exit = e {
-                app.state::<planet::Core>().save();
+                app.state::<planet::Core>().stop(); // the tick thread saves no more after this
             }
             let _ = (app, e);
         });
@@ -444,7 +458,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let icon = {
         let taskbar = Taskbar::new();
-        let white = white_scouter(app, &taskbar);
+        let white = white_scouter(app, || taskbar.guess());
         watch_taskbar(app.clone(), taskbar, white);
         scouter(white)?
     };
@@ -482,7 +496,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    *app.state::<State>().tray.lock().unwrap() = Some(Tray {
+    let tray = Tray {
         show,
         top,
         sizes,
@@ -491,7 +505,8 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         menu,
         #[cfg(target_os = "linux")]
         power: MenuItem::with_id(app, "power", "", false, none)?,
-    });
+    };
+    *app.state::<State>().tray.lock().unwrap() = Some(tray);
     Ok(())
 }
 
@@ -503,24 +518,23 @@ fn scouter(white: bool) -> tauri::Result<Image<'static>> {
 
 // the tray icon setting: "light" is the white scouter (for dark taskbars), "dark" the black one, "auto" the taskbar's theme
 #[cfg(not(target_os = "macos"))]
-fn white_scouter(app: &AppHandle, taskbar: &Taskbar) -> bool {
+fn white_scouter(app: &AppHandle, auto: impl FnOnce() -> bool) -> bool {
     let pick = app.state::<State>().settings.lock().unwrap()["tray_icon"].as_str().unwrap_or("auto").to_string();
     match pick.as_str() {
         "light" => true,
         "dark" => false,
-        _ => taskbar.dark(),
+        _ => auto(),
     }
 }
 
-// every few seconds, and at once when settings change, swaps the scouter if it should change. only "auto" asks the
-// system (cheap: a registry value, or one D-Bus call; no event covers the Windows taskbar alone)
+// at once, then every few seconds and when the pick changes, swaps the scouter if it should change. only "auto" asks
+// the system (cheap: a registry value, or one D-Bus call; no event covers the Windows taskbar alone)
 #[cfg(not(target_os = "macos"))]
-fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut white: bool) {
+fn watch_taskbar(app: AppHandle, mut taskbar: Taskbar, mut white: bool) {
     let (nudge, woken) = std::sync::mpsc::channel();
     *app.state::<State>().tray_nudge.lock().unwrap() = Some(nudge);
     std::thread::spawn(move || loop {
-        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
-        let now = white_scouter(&app, &taskbar);
+        let now = white_scouter(&app, || taskbar.dark());
         if now != white {
             if let (Some(tray), Ok(icon)) = (app.tray_by_id("tray"), scouter(now)) {
                 if tray.set_icon(Some(icon)).is_ok() {
@@ -528,6 +542,7 @@ fn watch_taskbar(app: AppHandle, taskbar: Taskbar, mut white: bool) {
                 }
             }
         }
+        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
     });
 }
 
@@ -539,6 +554,9 @@ impl Taskbar {
     fn new() -> Self {
         Taskbar
     }
+    fn guess(&self) -> bool {
+        self.dark()
+    }
     fn dark(&self) -> bool {
         use winreg::{enums::HKEY_CURRENT_USER, RegKey};
         let light = RegKey::predef(HKEY_CURRENT_USER)
@@ -549,10 +567,11 @@ impl Taskbar {
 }
 
 // Linux: the freedesktop settings portal's color scheme, where there is one (live); else the GTK theme's name, read once
-// at startup on the main thread (GTK lives there). With no preference, white: most panels are dark (GNOME's top bar is)
+// at startup on the main thread (GTK lives there). With no preference, white: most panels are dark (GNOME's top bar is).
+// The portal is only asked from the watcher's thread: a slow or hung session bus must not stall startup
 #[cfg(target_os = "linux")]
 struct Taskbar {
-    bus: Option<zbus::blocking::Connection>,
+    bus: Option<Option<zbus::blocking::Connection>>, // connected on first use
     gtk_dark: Option<bool>,
 }
 #[cfg(target_os = "linux")]
@@ -560,10 +579,15 @@ impl Taskbar {
     fn new() -> Self {
         use gtk::glib::object::ObjectExt;
         let theme = gtk::Settings::default().and_then(|s| s.property::<Option<String>>("gtk-theme-name"));
-        Taskbar { bus: zbus::blocking::Connection::session().ok(), gtk_dark: theme.map(|t| t.to_lowercase().contains("dark")) }
+        Taskbar { bus: None, gtk_dark: theme.map(|t| t.to_lowercase().contains("dark")) }
     }
-    fn dark(&self) -> bool {
-        match self.bus.as_ref().and_then(color_scheme) {
+    // the first icon, without the portal; the watcher corrects it at once
+    fn guess(&self) -> bool {
+        self.gtk_dark.unwrap_or(true)
+    }
+    fn dark(&mut self) -> bool {
+        let bus = self.bus.get_or_insert_with(|| zbus::blocking::Connection::session().ok());
+        match bus.as_ref().and_then(color_scheme) {
             Some(2) => false, // prefers light
             Some(_) => true,  // 1 prefers dark, 0 no preference
             None => self.gtk_dark.unwrap_or(true),
@@ -595,5 +619,71 @@ fn color_scheme(bus: &zbus::blocking::Connection) -> Option<u32> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tauri::{
+        ipc::{CallbackFn, InvokeBody},
+        test::{get_ipc_response, mock_builder, INVOKE_KEY},
+        webview::InvokeRequest,
+        WebviewUrl, WebviewWindowBuilder,
+    };
+
+    // a settings.json as 0.1.1 saved it: its keys carry over, the ones added since get their defaults, layout 4 is gone
+    #[test]
+    fn a_0_1_1_settings_file_merges() {
+        let saved = json!({
+            "on_top": false, "size": "large", "opacity": 0.8, "layout": 4, "hud": "always", "clouds": "never", "cloud_shape": "c",
+            "cloud_amount": 3, "mode": "window",
+            "notify": { "raid": false, "shenron": true, "trip": true, "pod": true, "ascend": true },
+            "quiet": { "on": true, "from": "23:00", "to": "07:00" },
+            "shortcut": "Alt+Cmd+KeyO"
+        });
+        let s = super::initial_settings(Some(&saved));
+        assert_eq!((s["fps"].clone(), s["menubar_power"].clone(), s["tray_icon"].clone()), (json!(30), json!(true), json!("auto")));
+        assert_eq!(s["layout"], json!(7));
+        assert_eq!((s["on_top"].clone(), s["size"].clone(), s["mode"].clone()), (json!(false), json!("large"), json!("window")));
+        assert_eq!(s["notify"]["pod"], json!(true));
+        assert_eq!(s["quiet"]["from"], json!("23:00"));
+        assert_eq!(s["shortcut"], json!("Alt+Cmd+KeyO"));
+        for layout in [7, 1, 2, 3, 6] {
+            assert_eq!(super::initial_settings(Some(&json!({ "layout": layout })))["layout"], json!(layout));
+        }
+        assert_eq!(super::initial_settings(Some(&json!({ "layout": 5 })))["layout"], json!(7));
+    }
+
+    // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
+    #[test]
+    fn each_window_may_call_only_its_own_commands() {
+        let app = mock_builder().invoke_handler(tauri::generate_handler![]).build(tauri::generate_context!(test = true)).unwrap();
+        let open = |label: &str| WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into())).build().unwrap();
+        let (main, settings) = (open("main"), open("settings"));
+        let call = |w: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str| {
+            let req = InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: w.url().unwrap(),
+                body: InvokeBody::Json(json!({})),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            };
+            !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
+        };
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "planet_start", "planet_buy"] {
+            assert!(call(&main, cmd), "main may call {cmd}");
+        }
+        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "planet_step", "planet_load", "planet_save"] {
+            assert!(!call(&main, cmd), "main may not call {cmd}");
+        }
+        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings"] {
+            assert!(call(&settings, cmd), "settings may call {cmd}");
+        }
+        for cmd in ["notify", "tray_title", "hide_widget", "planet_start", "planet_buy"] {
+            assert!(!call(&settings, cmd), "settings may not call {cmd}");
+        }
     }
 }
