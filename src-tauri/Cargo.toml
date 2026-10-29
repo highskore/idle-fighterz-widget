@@ -1,6 +1,6 @@
 [package]
 name = "idle-fighterz"
-version = "0.2.0"
+version = "0.2.1"
 description = "idle-fighterz: the Idle FighterZ game as a desktop widget"
 edition = "2021"
 license = "MIT"
