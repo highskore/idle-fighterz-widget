@@ -81,18 +81,23 @@
     return [BitConverter]::ToString($R) -eq [BitConverter]::ToString([byte[]]$sig[0..31])
   }
 
-  # minisign's legacy format (minisign -l): Ed25519 over the file, then over the signature and its trusted comment
-  function Test-Minisign([byte[]]$file, [string]$minisig, [string]$publicKey) {
+  # minisign's legacy format (minisign -l): Ed25519 over the file, then over the signature and its trusted comment.
+  # Returns the trusted comment it verified, or $null
+  function Test-Minisign([byte[]]$file, [byte[]]$minisig, [string]$publicKey) {
     $key = [Convert]::FromBase64String($publicKey)
-    $lines = $minisig -split "`n" | ForEach-Object { $_.TrimEnd("`r") }
-    if ($lines.Count -lt 4 -or -not $lines[2].StartsWith('trusted comment: ')) { return $false }
+    # exactly four lines (CRLF or LF), no bare CR and no NUL: the lines checked are the lines verified
+    $text = [Text.Encoding]::UTF8.GetString($minisig).Replace("`r`n", "`n")
+    $lines = $text -split "`n"
+    if ($lines.Count -eq 5 -and $lines[4] -eq '') { $lines = $lines[0..3] }
+    if ($text.IndexOf([char]13) -ge 0 -or $text.IndexOf([char]0) -ge 0 -or $lines.Count -ne 4 -or -not $lines[2].StartsWith('trusted comment: ')) { Write-Host 'SHA256SUMS.minisig is malformed'; return $null }
     $line = [Convert]::FromBase64String($lines[1]); $global = [Convert]::FromBase64String($lines[3])
-    if ($key.Length -ne 42 -or $line.Length -ne 74 -or $global.Length -ne 64) { return $false }
-    if ([Text.Encoding]::ASCII.GetString($line, 0, 2) -ne 'Ed') { Write-Host "SHA256SUMS.minisig isn't in minisign's legacy format (minisign -l)"; return $false }
-    if ([BitConverter]::ToString($line, 2, 8) -ne [BitConverter]::ToString($key, 2, 8)) { Write-Host 'SHA256SUMS is signed with another key'; return $false }
+    if ($key.Length -ne 42 -or $line.Length -ne 74 -or $global.Length -ne 64) { return $null }
+    if ([Text.Encoding]::ASCII.GetString($line, 0, 2) -ne 'Ed') { Write-Host "SHA256SUMS.minisig isn't in minisign's legacy format (minisign -l)"; return $null }
+    if ([BitConverter]::ToString($line, 2, 8) -ne [BitConverter]::ToString($key, 2, 8)) { Write-Host 'SHA256SUMS is signed with another key'; return $null }
     $pk = [byte[]]$key[10..41]; $sig = [byte[]]$line[10..73]
-    $comment = [Text.Encoding]::UTF8.GetBytes($lines[2].Substring('trusted comment: '.Length))
-    (Test-Ed25519 $pk $sig $file) -and (Test-Ed25519 $pk $global ([byte[]]($sig + $comment)))
+    $comment = $lines[2].Substring('trusted comment: '.Length)
+    if ((Test-Ed25519 $pk $sig $file) -and (Test-Ed25519 $pk $global ([byte[]]($sig + [Text.Encoding]::UTF8.GetBytes($comment))))) { return $comment }
+    return $null
   }
 
   $api = if ($env:POWERRR_RELEASE) { $env:POWERRR_RELEASE } else { "https://api.github.com/repos/$repo/releases/latest" }
@@ -113,12 +118,11 @@
     if ($minisig) {
       if (-not $MinisignPublicKey) { throw "install: this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing" }
       Invoke-WebRequest $minisig.browser_download_url -OutFile "$tmp\SHA256SUMS.minisig" -UseBasicParsing
-      $ok = Test-Minisign ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS")) ([IO.File]::ReadAllText("$tmp\SHA256SUMS.minisig")) $MinisignPublicKey
-      if (-not $ok) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
-      # the (signed) trusted comment names the release it was made for: an older release's SHA256SUMS and signature,
-      # served as a newer one, are refused
-      $comment = ((Get-Content "$tmp\SHA256SUMS.minisig")[2]).TrimEnd("`r")
-      if ($comment -cne "trusted comment: powerrr $($release.tag_name)") { throw "install: SHA256SUMS was signed for '$($comment -replace '^trusted comment: ')', not 'powerrr $($release.tag_name)': not installing" }
+      $comment = Test-Minisign ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS")) ([IO.File]::ReadAllBytes("$tmp\SHA256SUMS.minisig")) $MinisignPublicKey
+      if ($null -eq $comment) { throw "install: the signature on SHA256SUMS doesn't verify: not installing" }
+      # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
+      # signature, served as a newer one, are refused
+      if ($comment -cne "powerrr $($release.tag_name)") { throw "install: SHA256SUMS was signed for '$comment', not 'powerrr $($release.tag_name)': not installing" }
       Write-Host "SHA256SUMS signature ok ($($release.tag_name))"
     } else {
       # without this, deleting the .minisig would turn any release back into an unsigned one

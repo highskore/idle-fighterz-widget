@@ -84,9 +84,13 @@ JS
   [ "$(osascript -l JavaScript "$1.js" "$(hex < "$1")" "$(hex < "$2")" "$k" 2>/dev/null)" = ok ]
 }
 
-# verify_sums <SHA256SUMS> <SHA256SUMS.minisig>: the file signature and the trusted comment's, both by MINISIGN_PUBKEY
+# verify_sums <SHA256SUMS> <SHA256SUMS.minisig>: the file signature and the trusted comment's, both by MINISIGN_PUBKEY.
+# Sets SIGNED_COMMENT to the trusted comment it verified
 verify_sums() {
+  SIGNED_COMMENT=
   W=$(mktemp -d "$TMP/minisig.XXXXXX")
+  # exactly four lines, with no CR or NUL anywhere: every reader here (sed, minisign) then sees the same lines
+  tr -d '\r\000' < "$2" | cmp -s - "$2" && [ "$(awk 'END { print NR }' "$2")" = 4 ] || { say "SHA256SUMS.minisig is malformed"; return 1; }
   printf '%s' "$MINISIGN_PUBKEY" | b64d > "$W/key" 2>/dev/null || true
   sed -n 2p "$2" | b64d > "$W/line" 2>/dev/null || true
   sed -n 4p "$2" | b64d > "$W/global" 2>/dev/null || true
@@ -102,14 +106,15 @@ verify_sums() {
   { cat "$W/sig"; printf '%s' "${comment#trusted comment: }"; } > "$W/signed-comment"
 
   if command -v minisign >/dev/null 2>&1; then
-    minisign -V -q -P "$MINISIGN_PUBKEY" -m "$1" -x "$2"
+    minisign -V -q -P "$MINISIGN_PUBKEY" -m "$1" -x "$2" || return 1
   elif O=$(openssl3); then
-    ed25519_openssl "$O" "$W/pk" "$W/sig" "$1" && ed25519_openssl "$O" "$W/pk" "$W/global" "$W/signed-comment"
+    ed25519_openssl "$O" "$W/pk" "$W/sig" "$1" && ed25519_openssl "$O" "$W/pk" "$W/global" "$W/signed-comment" || return 1
   elif [ "$(uname -s)" = Darwin ]; then
-    ed25519_jsc "$W/pk" "$W/sig" "$1" && ed25519_jsc "$W/pk" "$W/global" "$W/signed-comment"
+    ed25519_jsc "$W/pk" "$W/sig" "$1" && ed25519_jsc "$W/pk" "$W/global" "$W/signed-comment" || return 1
   else
     die "can't check the signature on SHA256SUMS: install minisign or OpenSSL 3, then run this again"
   fi
+  SIGNED_COMMENT=${comment#trusted comment: }
 }
 
 # fetch_sums <SHA256SUMS url> <SHA256SUMS.minisig url, or empty>: downloads SHA256SUMS to $TMP and checks its signature,
@@ -120,10 +125,9 @@ fetch_sums() {
     [ -n "$MINISIGN_PUBKEY" ] || die "this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing"
     curl -fsSL "$2" -o "$TMP/SHA256SUMS.minisig"
     verify_sums "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" || die "the signature on SHA256SUMS doesn't verify: not installing"
-    # the (signed) trusted comment names the release it was made for: an older release's SHA256SUMS and signature,
-    # served as a newer one, are refused
-    comment=$(sed -n 3p "$TMP/SHA256SUMS.minisig")
-    [ "$comment" = "trusted comment: powerrr $TAG" ] || die "SHA256SUMS was signed for '${comment#trusted comment: }', not 'powerrr $TAG': not installing"
+    # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
+    # signature, served as a newer one, are refused
+    [ "$SIGNED_COMMENT" = "powerrr $TAG" ] || die "SHA256SUMS was signed for '$SIGNED_COMMENT', not 'powerrr $TAG': not installing"
     say "SHA256SUMS signature ok ($TAG)"
   else
     # without this, deleting the .minisig would turn any release back into an unsigned one

@@ -57,6 +57,7 @@ VERIFIERS="minisign openssl"
 [ "$(uname -s)" = Darwin ] && VERIFIERS="$VERIFIERS jsc"
 cp "$T/SUMS" "$T/SUMS.bad" && printf 'deadbeef  evil\n' >> "$T/SUMS.bad"
 sed '3s/$/!/' "$T/SUMS.minisig" > "$T/comment.minisig"   # the trusted comment changed
+awk 'NR == 3 { printf "%s\r\n", $0; next } { print }' "$T/SUMS.minisig" > "$T/cr.minisig"   # a bare CR
 for v in $VERIFIERS; do
   r=$(verify "$v" "$T/SUMS" "$T/SUMS.minisig")
   [ "$r" = skip ] && { printf 'skip: %s (not on this system)\n' "$v"; continue; }
@@ -64,7 +65,8 @@ for v in $VERIFIERS; do
   [ "$(verify "$v" "$T/SUMS.bad" "$T/SUMS.minisig")" = refuse ] || fail "$v: a tampered SHA256SUMS passed"
   [ "$(verify "$v" "$T/SUMS" "$T/comment.minisig")" = refuse ] || fail "$v: a tampered trusted comment passed"
   [ "$(verify "$v" "$T/SUMS" "$T/SUMS.minisig" "$OTHER")" = refuse ] || fail "$v: another key's signature passed"
-  ok "$v verifies a good signature and refuses a tampered file, comment and key"
+  [ "$(verify "$v" "$T/SUMS" "$T/cr.minisig")" = refuse ] || fail "$v: a .minisig with a CR in it passed"
+  ok "$v verifies a good signature and refuses a tampered file, comment or key, and a CR"
 done
 # the prehashed format (minisign without -l) isn't one the fallbacks can check: refused everywhere alike
 "$MINISIGN" -S -s "$T/key/k.key" -m "$T/SUMS" -x "$T/hashed.minisig" >/dev/null
@@ -81,7 +83,7 @@ mkdir -p "$SRV"
 NAME=$(basename "$PKG")
 cp "$PKG" "$SRV/"
 # one folder per release, each with its SHA256SUMS (and SHA256SUMS.minisig)
-mkdir -p "$SRV/unsigned" "$SRV/unsigned-new" "$SRV/legacy-changed" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad" "$SRV/replay"
+mkdir -p "$SRV/unsigned" "$SRV/unsigned-new" "$SRV/legacy-changed" "$SRV/signed" "$SRV/tampered" "$SRV/signed-bad" "$SRV/replay" "$SRV/crtrick"
 (cd "$SRV" && shasum -a 256 "$NAME" > unsigned/SHA256SUMS)
 # ci-unsigned stands for a release from before signing (pinned in the installer); ci-unsigned-new for a later one whose
 # .minisig was deleted; legacy-changed is ci-unsigned with its SHA256SUMS swapped
@@ -91,10 +93,13 @@ printf '%064d  %s\n' 0 "$NAME" > "$SRV/legacy-changed/SHA256SUMS"
 cp "$SRV/unsigned/SHA256SUMS" "$SRV/signed/" && sign "$SRV/signed/SHA256SUMS" 'powerrr ci-signed'
 cp "$SRV/signed/SHA256SUMS" "$SRV/signed/SHA256SUMS.minisig" "$SRV/tampered/" && printf '%064d  extra\n' 0 >> "$SRV/tampered/SHA256SUMS"
 cp "$SRV/signed/SHA256SUMS" "$SRV/signed/SHA256SUMS.minisig" "$SRV/replay/"   # ci-signed's, served as ci-replay
+# ci-signed's, with a second "trusted comment" after a bare CR that a CR-splitting reader would see as line 4
+cp "$SRV/signed/SHA256SUMS" "$SRV/crtrick/"
+awk 'NR == 3 { printf "%s\rtrusted comment: powerrr ci-crtrick\n", $0; next } { print }' "$SRV/signed/SHA256SUMS.minisig" > "$SRV/crtrick/SHA256SUMS.minisig"
 printf '%064d  %s\n' 0 "$NAME" > "$SRV/signed-bad/SHA256SUMS" && sign "$SRV/signed-bad/SHA256SUMS" 'powerrr ci-signed-bad'   # a wrong hash
 PORT=8766
 URL=http://127.0.0.1:$PORT
-for r in unsigned unsigned-new legacy-changed signed tampered signed-bad replay; do
+for r in unsigned unsigned-new legacy-changed signed tampered signed-bad replay crtrick; do
   tag=ci-$r; [ $r != legacy-changed ] || tag=ci-unsigned
   sig=; [ ! -f "$SRV/$r/SHA256SUMS.minisig" ] || sig=", {\"name\": \"SHA256SUMS.minisig\", \"browser_download_url\": \"$URL/$r/SHA256SUMS.minisig\"}"
   printf '{"tag_name": "%s", "assets": [{"name": "%s", "browser_download_url": "%s/%s"}, {"name": "SHA256SUMS", "browser_download_url": "%s/%s/SHA256SUMS"}%s]}\n' \
@@ -147,6 +152,10 @@ ok "a release from before signing with a changed SHA256SUMS is refused"
 run "$T/install.sh" replay
 [ $code != 0 ] && ! installed && grep -q "was signed for 'powerrr ci-signed', not 'powerrr ci-replay'" "$T/out" || fail "another release's signed SHA256SUMS wasn't refused"
 ok "another release's signed SHA256SUMS is refused"
+
+run "$T/install.sh" crtrick
+[ $code != 0 ] && ! installed && grep -q 'malformed' "$T/out" || fail "a .minisig with a bare CR wasn't refused"
+ok "a .minisig with a bare CR is refused"
 
 run "$T/install.sh" tampered
 [ $code != 0 ] && ! installed && grep -q "doesn't verify" "$T/out" || fail "a tampered SHA256SUMS wasn't refused"

@@ -304,10 +304,13 @@ jobs:
           Copy-Item "$srv\SHA256SUMS" "$srv\SIGNED"
           & $ms -S -l -s "$k\k.key" -m "$srv\SIGNED" -t 'powerrr ci-signed'
           if ($LASTEXITCODE) { throw 'minisign -S failed' }
+          # ci-signed's signature with a second "trusted comment" after a bare CR, which Get-Content would split on
+          $m = [IO.File]::ReadAllText("$srv\SIGNED.minisig").Replace('trusted comment: powerrr ci-signed', "trusted comment: powerrr ci-signed`rtrusted comment: powerrr ci-crtrick")
+          [IO.File]::WriteAllText("$srv\CRTRICK.minisig", $m)
           Copy-Item "$srv\SIGNED" "$srv\TAMPERED"
           Add-Content -Encoding ascii "$srv\TAMPERED" "$('0' * 64)  extra"
           # ci-replay serves ci-signed's SHA256SUMS and signature as its own
-          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('new', 'SHA256SUMS', ''), ('swapped', 'BADSUMS', '', 'good'), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'), ('replay', 'SIGNED', 'SIGNED.minisig'))) {
+          foreach ($r in @(('good', 'SHA256SUMS', ''), ('bad', 'BADSUMS', ''), ('new', 'SHA256SUMS', ''), ('swapped', 'BADSUMS', '', 'good'), ('signed', 'SIGNED', 'SIGNED.minisig'), ('tampered', 'TAMPERED', 'SIGNED.minisig'), ('replay', 'SIGNED', 'SIGNED.minisig'), ('crtrick', 'SIGNED', 'CRTRICK.minisig'))) {
             $assets = @(@{ name = $setup.Name; browser_download_url = "$url/$($setup.Name)" }, @{ name = 'SHA256SUMS'; browser_download_url = "$url/$($r[1])" })
             if ($r[2]) { $assets += @{ name = 'SHA256SUMS.minisig'; browser_download_url = "$url/$($r[2])" } }
             $tag = if ($r.Count -gt 3) { $r[3] } else { $r[0] }
@@ -376,6 +379,7 @@ jobs:
           Refused 'install.ps1' 'new' 'no SHA256SUMS.minisig' 'a later release without a .minisig'
           Refused 'install.ps1' 'swapped' "isn't the one it was released with" 'a changed SHA256SUMS on a release from before signing'
           Refused 'install-test.ps1' 'tampered' "doesn't verify" 'a SHA256SUMS changed after signing'
+          Refused 'install-test.ps1' 'crtrick' 'malformed' 'a .minisig with a bare CR'
           Refused 'install-test.ps1' 'replay' "was signed for 'powerrr ci-signed', not 'powerrr ci-replay'" "another release's signed SHA256SUMS"
           Refused 'install.ps1' 'signed' 'another key' 'a SHA256SUMS signed with another key'
           Refused 'install-nokey.ps1' 'signed' 'no key to check it with' 'a signed SHA256SUMS with no key in the installer'
