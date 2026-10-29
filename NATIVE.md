@@ -2,13 +2,13 @@
 
 Stage 5 of the Rust port. `planet-core` + `planet-render` (highskore/idle-fighterz, `rust/`) will step the game and draw it into an RGBA framebuffer at the game's internal resolution. This is the shell that shows that framebuffer in the Idle FighterZ window without a web view. Until the core lands, a stand-in source feeds it.
 
-Nothing changes for users: the code compiles only with the `native-renderer` cargo feature, and even then only a hidden setting turns it on.
+Since 0.2 the shipped widget runs on the Rust core with this layer under its HUD on macOS: see [What ships](#what-ships-02). The stand-in sources below still sit behind a hidden setting.
 
 ## Try it
 
 ```sh
-npm run page                                   # the web widget, still the default
-npx tauri build --bundles app --features native-renderer
+npm run page
+npx tauri build --bundles app
 # in ~/Library/Application Support/<bundle id>/settings.json:
 #   "native_renderer": "planet"    recorded planet frames, looped at 12fps
 #   "native_renderer": "pattern"   an animated test pattern that changes every frame
@@ -66,12 +66,12 @@ Recommendation: ship 1 first. It keeps one HUD for the site and the widget, and 
 
 ## The Rust core (feature `rust-core`)
 
-Stage 5a and 5b. `planet-core` (`game/rust/planet-core`, a path dependency into the submodule) runs the game in the app, `planet-render` draws it, and the window's page is only its HUD. Without the feature, the build is unchanged.
+Stage 5a and 5b. `planet-core` (`game/rust/planet-core`, a path dependency into the submodule) runs the game in the app, `planet-render` draws it, and the window's page is only its HUD. A default feature since 0.2; `--no-default-features` builds the web-view game.
 
 ```sh
-npm run page:hud                               # dist/index.html, then dist/hud.html from it
-npx tauri dev --features rust-core                       # frames on the HUD page's canvas
-npx tauri dev --features rust-core,native-renderer      # macOS: with "native_renderer": "core" in settings.json, on a layer under it
+npm run page                                   # dist/index.html, then dist/hud.html from it
+npx tauri dev                                  # macOS: frames on a layer under the HUD page; elsewhere on its canvas
+IDLE_FIGHTERZ_ENGINE=canvas npx tauri dev      # on the HUD page's canvas on macOS too
 ```
 
 - **`src-tauri/src/planet.rs`**: `Core` holds `planet_core::bridge::Bridge` in a `Mutex`. Each row of `game/rust/HUD.md`'s calls table is a `planet_<call>` command, with HUD.md's argument names (`now_ms`, `bx`, …) and its results (numbers, bools, JSON strings). Not included: `new` (the app makes the game, which outlives the page) and `spots`/`probe` (the web build's lockstep twin).
@@ -85,9 +85,26 @@ npx tauri dev --features rust-core,native-renderer      # macOS: with "native_re
 - **`planet::Painter`**: planet-render's `Scene` and `Framebuffer` at the page's `st.W`×`st.H` and `st.scale`, with the view the page has: floating (`BARE`) or window mode, `st.clouds` and `st.cloudAmt` (they change with the pointer, so `hud.js` watches them), then widget.js's rim when floating. `hud.js` reports all of that, reduced motion, where its canvas sits and the page's opacity with `planet_view`; nothing is drawn until it has.
 - **Where it draws**: inside the tick, between the step's logic and its timeouts, as `Bridge::step_drawn` does, so the drawing's random draws (particles) and its write-backs (where the hero, the boss and the visitors stand, which taps hit-test) come in game.js's order. A tick that runs several steps (battery saver, or a stall) draws only the last, as page.html draws only the last of its battery-saver steps. The 5a seam (`Renderer::draw(&Game)` called from the layer's own 60 Hz loop) couldn't do either: drawing changes the game, so it has to happen in the step, under the same lock. It's gone, and so is `Frames`.
 - **On the page's canvas** (any OS): a frame the page should show adds `"px": true` to the tick's message; `hud.js` fetches it with `planet_pixels` (raw bytes over IPC, not JSON; one request in flight, a newer frame waits for it) and puts it on its canvas. `st.buf` holds it, so widget.js's empty-sky drag test reads the real alpha. Window mode always draws this way: its skies are CSS backgrounds under the canvas (page.html's `.game` per world, the night stars), which a layer under the page would cover.
-- **On a layer under the page** (macOS, with `native-renderer` too, and `"native_renderer": "core"` in settings.json): `native::Under` puts a layer-hosting `NSView` under the web view, with one `CALayer` placed exactly over the page's canvas and stretched to it nearest-neighbour, as `image-rendering: pixelated` stretches the canvas, at the page's opacity. Floating, `planet_view` says the layer has it, and the page's canvas stays empty; the web view stays on top, transparent, and takes every press. A frame goes up only when it changed, from the tick thread itself (no hop to the main thread): into one of three `IOSurface`s the window server isn't showing, only the pixels that differ from the frame that surface last held, then set as the layer's `contents` in a transaction with actions off. See [Energy](#energy-the-layer-on-the-efficiency-cores). For the drag test, `hud.js` fetches the frame's alpha as one bit a pixel (`planet_mask`) at most ten times a second while the pointer is over the widget.
+- **On a layer under the page** (macOS, with `native-renderer` too): `native::Under` puts a layer-hosting `NSView` under the web view, with one `CALayer` placed exactly over the page's canvas and stretched to it nearest-neighbour, as `image-rendering: pixelated` stretches the canvas, at the page's opacity. Floating, `planet_view` says the layer has it, and the page's canvas stays empty; the web view stays on top, transparent, and takes every press. A frame goes up only when it changed, from the tick thread itself (no hop to the main thread): into one of three `IOSurface`s the window server isn't showing, only the pixels that differ from the frame that surface last held, then set as the layer's `contents` in a transaction with actions off. See [Energy](#energy-the-layer-on-the-efficiency-cores). For the drag test, `hud.js` fetches the frame's alpha as one bit a pixel (`planet_mask`) at most ten times a second while the pointer is over the widget.
 - **Pictures**: `thumb(id)` draws the hero's idle sprite (`planet_sprite`, from planet-core's sprite data) as game.js does; the share card's `spr` is the hero's current one and its `scene` the page's canvas, or on the layer a copy of the frame fetched as the share button is pressed.
 - **Windows and Linux** draw on the page's canvas. A native surface under the HUD there would need a transparent web view over a sibling surface: WebView2 under wry is a child window (windowed hosting), and child windows don't blend with what's under them; getting that means WebView2's composition hosting with DirectComposition, which wry doesn't use, or a second top-level window kept behind the widget. WebKitGTK could sit in a `GtkOverlay` over a drawing area, but that's untested on X11 and Wayland compositors and would need its own measurements. The canvas path costs one raw IPC response and one `putImageData` a frame, with no JavaScript game.
+
+### What ships (0.2)
+
+`rust-core` and `native-renderer` are the default features, so `cargo build`, `npm run build` and the release workflow all build the same thing (`native-renderer` compiles to nothing outside macOS). Where the frames go:
+
+| | floating | window mode |
+|---|---|---|
+| macOS | the layer under the HUD page | the HUD page's canvas |
+| Windows, Linux | the HUD page's canvas | the HUD page's canvas |
+
+- **Fallback.** If `native::Under::new` returns an error at setup, the app logs it and runs without a surface: the canvas path, on the same Rust core. If the layer never gets made (no superview or window when the main thread gets to it), `place` says so and the page draws. If a frame can't go up later (no colour space, colour matching or `IOSurface`), the layer is emptied and hidden for good, that tick's message carries `"px": true`, and `hud.js`, seeing `px` while it thinks the layer has the frames, asks `planet_view` again and switches to its canvas. So a failing layer costs at most one frame, never a blank widget. `a_failing_surface_hands_the_frames_to_the_page` checks the tick's side.
+- **Logs** (stderr): `engine: …` once at launch, and `frames: on the layer under the page` / `on the page's canvas (window mode)` / `(no layer)` each time that changes, or `frames: the layer failed (…)`. With `IDLE_FIGHTERZ_SMOKE`, `engine: the Rust core` and `hidden: the core plays on` go to its file too.
+- **Escape hatches**, read at launch:
+  - `IDLE_FIGHTERZ_ENGINE=canvas`: the Rust core on the page's canvas, on macOS too.
+  - `IDLE_FIGHTERZ_ENGINE=web`: 0.1's game, game.js in the web view (`dist/index.html`, which the build still makes). The Rust core isn't started.
+  - From Finder or at login, set it with `launchctl setenv IDLE_FIGHTERZ_ENGINE web` and quit and reopen the app (`launchctl unsetenv` to undo); on Windows, `setx IDLE_FIGHTERZ_ENGINE web`. It's an environment variable rather than a setting because settings.json keeps only the keys in `DEFAULTS`, and changing any setting would drop it.
+- **Trying the fallback**: `IDLE_FIGHTERZ_NATIVE_FAIL=setup` makes `Under::new` fail, `=layer` skips making the layer, and `=show` fails the first frame.
 
 ### The pixel proof
 

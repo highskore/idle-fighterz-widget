@@ -346,6 +346,8 @@ fn plays_hidden(app: &AppHandle) -> bool {
 // a hidden catch-up of the game on the Rust core: the menu-bar power level and notifications, as widget.js would
 #[cfg(feature = "rust-core")]
 fn hidden_tick(app: &AppHandle, caught: planet::Caught) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| smoke("hidden: the core plays on"));
     let s = app.state::<State>().settings.lock().unwrap().clone();
     let power = planet::short(caught.pl);
     if s["menubar_power"].as_bool().unwrap_or(true) && *app.state::<State>().power.lock().unwrap() != power {
@@ -474,15 +476,23 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             notes::init(app.handle());
-            // the game runs here, and the window shows only its HUD (dist/hud.html, npm run page:hud)
+            // the game runs here, and the window shows only its HUD (dist/hud.html). IDLE_FIGHTERZ_ENGINE=web keeps 0.1's
+            // game.js in the page (index.html); =canvas keeps the frames on the page's canvas on macOS too
             #[cfg(feature = "rust-core")]
-            {
+            if std::env::var("IDLE_FIGHTERZ_ENGINE").as_deref() == Ok("web") {
+                eprintln!("engine: game.js in the web view (IDLE_FIGHTERZ_ENGINE=web)");
+            } else {
                 app.manage(planet::Core::new(planet::seed(), app.path().app_data_dir()?.join("power.json")));
-                // a hidden setting, as below: the frames in a layer under the page rather than on its canvas
                 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
-                if saved.as_ref().and_then(|s| s.get("native_renderer")?.as_str()) == Some("core") {
-                    app.state::<planet::Core>().set_surface(Box::new(native::Under::new(app.handle())?));
+                if std::env::var("IDLE_FIGHTERZ_ENGINE").as_deref() != Ok("canvas") {
+                    // floating, the frames go in a layer under the page; window mode, or if the layer fails, on its canvas
+                    match native::Under::new(app.handle()) {
+                        Ok(u) => app.state::<planet::Core>().set_surface(Box::new(u)),
+                        Err(e) => eprintln!("engine: no layer under the page ({e})"),
+                    }
                 }
+                eprintln!("engine: the Rust core, behind the HUD page");
+                smoke("engine: the Rust core");
                 main.navigate(main.url()?.join("hud.html")?)?;
                 planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
             }
@@ -514,8 +524,8 @@ fn main() {
                 show_widget(app, true);
             }
             #[cfg(feature = "rust-core")]
-            if let tauri::RunEvent::Exit = e {
-                app.state::<planet::Core>().stop(); // the tick thread saves no more after this
+            if let (tauri::RunEvent::Exit, Some(core)) = (&e, app.try_state::<planet::Core>()) {
+                core.stop(); // the tick thread saves no more after this
             }
             let _ = (app, e);
         });

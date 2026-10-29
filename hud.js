@@ -81,7 +81,7 @@ GAMES.push({
     };
     tauri.event.listen('planet', ({ payload }) => {
       const m = JSON.parse(payload);
-      if (m.px && !native) pixels();
+      if (m.px) { if (native) show(); else pixels(); }   // while the layer has them: stale, or the layer failed; ask the app
       const stale = m.shop || m.cues.length || 'world' in m || (m.hud && performance.now() - fresh >= 1000);
       queue = queue.then(() => (stale ? refresh() : null)).then(() => deliver(m)).catch(e => console.error(e));
     });

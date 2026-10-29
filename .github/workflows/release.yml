@@ -78,25 +78,25 @@ jobs:
           npm ci --no-audit --no-fund
           npm run -s page
 
-      # the experimental features build and pass their tests too (a tag's commit has been through this already)
+      # what ships (the default features), and the other builds still in the code: 0.1's web-view game (none), the
+      # canvas path alone (rust-core) and the stand-in sources (native-renderer). A tag's commit has been through this
       - name: cargo test and clippy, every feature (macOS)
         if: matrix.platform == 'macos' && !startsWith(github.ref, 'refs/tags/')
         working-directory: src-tauri
         run: |
-          cargo test --features rust-core
-          cargo test --features rust-core,native-renderer native::
-          for f in '' rust-core native-renderer rust-core,native-renderer; do
-            echo "--- clippy ${f:-default}"
-            cargo clippy --all-targets ${f:+--features $f} -- -D warnings
+          cargo test
+          for f in rust-core,native-renderer '' rust-core native-renderer; do
+            echo "--- clippy ${f:-no features}"
+            cargo clippy --all-targets --no-default-features ${f:+--features $f} -- -D warnings
           done
 
-      - name: cargo test, rust-core (Windows, Linux)
+      - name: cargo test (Windows, Linux)
         if: matrix.platform != 'macos' && !startsWith(github.ref, 'refs/tags/')
         working-directory: src-tauri
         shell: bash
         run: |
-          cargo check --features rust-core
-          cargo test --features rust-core
+          cargo check
+          cargo test
 
       # ---- macOS ----
 
@@ -201,7 +201,7 @@ jobs:
 
       # install it the way install.ps1 does, start it, and check it's still up after a while; a second launch must hand
       # over to the first and exit. IDLE_FIGHTERZ_SMOKE hides the widget after 8 s: WebView2 must then tell the page it's
-      # hidden, and the page must keep the game going headless (the tray number is on by default)
+      # hidden, and the Rust core must keep the game going (the tray number is on by default)
       - name: smoke test (Windows)
         if: matrix.platform == 'windows'
         shell: powershell
@@ -220,7 +220,9 @@ jobs:
           Start-Sleep 20
           if ($p.HasExited) { throw "exited with $($p.ExitCode)" }
           Get-Content "$env:RUNNER_TEMP\smoke.log"
-          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'page hidden=true away=true ticking=true' -Quiet)) { throw 'hidden, the page did not see document.hidden and tick headless' }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'engine: the Rust core' -Quiet)) { throw 'the game is not on the Rust core' }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'page hidden=true away=true' -Quiet)) { throw 'hidden, the page did not see document.hidden' }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'hidden: the core plays on' -Quiet)) { throw 'hidden, the core did not keep playing' }
           $second = Start-Process $exe.FullName -PassThru
           if (-not $second.WaitForExit(15000)) { throw 'a second launch kept running' }
           if ($p.HasExited) { throw 'the first instance died' }
@@ -228,7 +230,7 @@ jobs:
           'ok'
 
       # the AppImage under Xvfb, which has no compositor: it must fall back to window mode rather than fail. Hidden (by
-      # IDLE_FIGHTERZ_SMOKE, after 8 s), the page must hear it and keep the game going headless
+      # IDLE_FIGHTERZ_SMOKE, after 8 s), the page must hear it and the Rust core keep the game going
       - name: smoke test (Linux)
         if: matrix.platform == 'linux'
         run: |
@@ -240,7 +242,9 @@ jobs:
           dbus-run-session -- xvfb-run -a sh -c "\"$APP\" --appimage-extract-and-run > run.log 2>&1 & sleep 20; kill -0 \$! && kill \$!" || { cat run.log; exit 1; }
           cat run.log smoke.log
           grep -q 'no compositor' run.log
-          grep -q 'away=true ticking=true' smoke.log
+          grep -q 'engine: the Rust core' smoke.log
+          grep -q 'hidden=true away=true' smoke.log
+          grep -q 'hidden: the core plays on' smoke.log
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

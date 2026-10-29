@@ -61,8 +61,8 @@ pub trait Surface: Send + Sync {
     /// Where the page's canvas is (`[x, y, w, h]` in CSS pixels), the page's opacity and whether the widget floats.
     /// True if this shows the frames from now on; false if the page should.
     fn place(&self, rect: [f64; 4], opacity: f64, bare: bool) -> bool;
-    /// A frame: RGBA8, straight alpha, rows top to bottom.
-    fn show(&self, rgba: &[u8], w: u32, h: u32);
+    /// A frame: RGBA8, straight alpha, rows top to bottom. False if it can't show frames any more: the page takes over.
+    fn show(&self, rgba: &[u8], w: u32, h: u32) -> bool;
     /// Called once on the tick thread, before it first sleeps.
     fn tick_thread(&self) {}
     /// The tick's sleep between frames.
@@ -215,7 +215,10 @@ impl Core {
                     match self.surface.get().filter(|_| p.native) {
                         Some(s) => {
                             let (w, h) = p.painter.size();
-                            s.show(p.painter.rgba(), w, h);
+                            if !s.show(p.painter.rgba(), w, h) {
+                                p.native = false;
+                                page_px = true;
+                            }
                         }
                         None => page_px = true,
                     }
@@ -915,6 +918,38 @@ mod tests {
         assert!(p.rgba().chunks(4).any(|c| c[3] == 255), "something drawn");
         assert_eq!(core.with(|c| c.game.save_json()).unwrap(), b.game.save_json());
         assert_eq!(core.with(|c| c.game.rng.draws()).unwrap(), b.game.rng.draws(), "the drawing's random draws");
+    }
+
+    // a layer that stops taking frames mid-game: from that frame on the page draws them, and the layer isn't asked again
+    #[test]
+    fn a_failing_surface_hands_the_frames_to_the_page() {
+        use std::sync::{atomic::{AtomicU32, Ordering}, Arc};
+        struct Fails(Arc<AtomicU32>);
+        impl Surface for Fails {
+            fn place(&self, _: [f64; 4], _: f64, bare: bool) -> bool {
+                bare
+            }
+            fn show(&self, _: &[u8], _: u32, _: u32) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed) < 3
+            }
+        }
+        let (app, w) = app(file("fails"));
+        let core = app.state::<Core>();
+        let shown = Arc::new(AtomicU32::new(0));
+        core.set_surface(Box::new(Fails(shown.clone())));
+        let (today, t0) = ("Wed Oct 28 2026", 1.7e12);
+        call(&w, "resize", json!({ "w": 400.0, "h": 356.0, "scale": 1.0 }));
+        let args = json!({ "bare": true, "clouds": "", "amount": 2.0, "calm": false, "x": 0.0, "y": 0.0, "w": 400.0, "h": 356.0, "opacity": 1.0 });
+        assert_eq!(call(&w, "view", args), json!(true), "the layer shows the frames");
+        call(&w, "start", json!({ "today": today, "now_ms": t0 }));
+        let px: Vec<bool> = (0..8)
+            .map(|i| {
+                let msg: Value = serde_json::from_str(&core.tick(DT, t0 + i as f64 * 33.0).unwrap_or_else(|| EMPTY.into())).unwrap();
+                msg["px"] == json!(true)
+            })
+            .collect();
+        assert_eq!(px, [false, false, false, true, true, true, true, true]);
+        assert_eq!(shown.load(Ordering::Relaxed), 4, "not asked again once it failed");
     }
 
     // The painter against game.js drawing the same frame headless (the game's rust/difftest/frame.js, through

@@ -12,7 +12,10 @@ use objc2_io_surface::{kIOSurfaceBytesPerElement, kIOSurfaceColorSpace, kIOSurfa
 use objc2_quartz_core::{kCAFilterNearest, kCAGravityResize, CALayer, CATransaction};
 use std::{
     ptr::NonNull,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
@@ -38,6 +41,10 @@ pub struct Under {
     stats: Option<Arc<Stats>>,
     // the tick thread's timer
     kq: i32,
+    // a frame couldn't go up: the page draws them from then on
+    failed: AtomicBool,
+    // IDLE_FIGHTERZ_NATIVE_FAIL=show, to try the fallback
+    fail_show: bool,
 }
 
 #[derive(Default)]
@@ -49,6 +56,8 @@ struct Shown {
     pool: Vec<Buffer>,
     front: usize,
     colours: Option<AnyThread<Colours>>,
+    // where the frames went, last logged
+    said: &'static str,
 }
 
 struct Buffer {
@@ -65,13 +74,22 @@ unsafe fn window_space(window: &AnyObject) -> Option<CFRetained<CGColorSpace>> {
 }
 
 impl Under {
-    /// Puts an empty, hidden layer under the main window's web view; call on the main thread.
+    /// Puts an empty, hidden layer under the main window's web view; call on the main thread. The layer is made on the
+    /// main thread later: until it is, and if it never is, `place` leaves the frames to the page.
     pub fn new(app: &AppHandle) -> tauri::Result<Self> {
         use tauri::Manager;
+        // setup, layer or show: fail there, to try the fallback
+        let fail = std::env::var("IDLE_FIGHTERZ_NATIVE_FAIL").unwrap_or_default();
+        if fail == "setup" {
+            return Err(std::io::Error::other("IDLE_FIGHTERZ_NATIVE_FAIL=setup").into());
+        }
         let win = app.get_webview_window("main").expect("main window");
         let (slot, space): (Slot<Retained<CALayer>>, Slot<CFRetained<CGColorSpace>>) = Default::default();
-        let (made, spaced) = (slot.clone(), space.clone());
+        let (made, spaced, no_layer) = (slot.clone(), space.clone(), fail == "layer");
         win.with_webview(move |w| unsafe {
+            if no_layer {
+                return;
+            }
             let web = w.inner() as *mut AnyObject;
             let parent: Option<Retained<AnyObject>> = msg_send![web, superview];
             let Some(parent) = parent else { return };
@@ -115,7 +133,23 @@ impl Under {
             state: Mutex::default(),
             stats: std::env::var_os("IDLE_FIGHTERZ_NATIVE_STATS").map(|_| Arc::new(Stats::default())),
             kq: unsafe { libc::kqueue() },
+            failed: AtomicBool::new(false),
+            fail_show: fail == "show",
         })
+    }
+
+    // the page draws from now on; the layer is emptied so nothing stale shows under its canvas
+    fn give_up(&self, why: &str) -> bool {
+        if !self.failed.swap(true, Ordering::Relaxed) {
+            eprintln!("frames: the layer failed ({why}), on the page's canvas from now on");
+            self.on_main(|l| {
+                quietly(|| {
+                    unsafe { l.setContents(None) };
+                    l.setHidden(true);
+                })
+            });
+        }
+        false
     }
 
     fn on_main(&self, f: impl FnOnce(&CALayer) + Send + 'static) {
@@ -221,9 +255,19 @@ fn fill(b: &mut Buffer, rgba: &[u8], w: u32, h: u32, c: &mut Colours) {
 impl crate::planet::Surface for Under {
     fn place(&self, [x, y, w, h]: [f64; 4], opacity: f64, bare: bool) -> bool {
         let mut s = self.state.lock().unwrap();
-        s.on = bare && w > 0.0 && h > 0.0;
+        let ready = !self.failed.load(Ordering::Relaxed) && self.layer.lock().unwrap().is_some();
+        s.on = ready && bare && w > 0.0 && h > 0.0;
         s.up = false; // the next frame goes up, whatever it is
         let on = s.on;
+        let path = match (on, ready) {
+            (true, _) => "on the layer under the page",
+            (false, true) => "on the page's canvas (window mode)",
+            (false, false) => "on the page's canvas (no layer)",
+        };
+        if s.said != path {
+            eprintln!("frames: {path}");
+            s.said = path;
+        }
         self.on_main(move |l| {
             quietly(|| {
                 if on {
@@ -240,14 +284,18 @@ impl crate::planet::Surface for Under {
 
     // on the tick thread, with no hop to the main thread: the frame goes into a surface the window server isn't
     // showing, and the layer takes that surface as its contents
-    fn show(&self, rgba: &[u8], w: u32, h: u32) {
+    fn show(&self, rgba: &[u8], w: u32, h: u32) -> bool {
         let t0 = Instant::now();
         let mut s = self.state.lock().unwrap();
         if !s.on || (s.up && s.pool.get(s.front).is_some_and(|b| b.held == rgba)) {
-            return;
+            return true;
+        }
+        if self.fail_show {
+            return self.give_up("IDLE_FIGHTERZ_NATIVE_FAIL=show");
         }
         let layer = self.layer.lock().unwrap();
-        let (Some(layer), Some(space)) = (layer.as_ref(), self.space.lock().unwrap().as_ref().map(|c| c.0.clone())) else { return };
+        let Some(layer) = layer.as_ref() else { return self.give_up("no layer") };
+        let Some(space) = self.space.lock().unwrap().as_ref().map(|c| c.0.clone()) else { return self.give_up("no colour space") };
         // a new size or a new colour space: new surfaces, and the colours matched again
         if s.colours.as_ref().is_none_or(|c| c.0.space != space) || s.pool.first().is_some_and(|b| b.held.len() != rgba.len() || b.surface.0.width() != w as usize) {
             s.pool.clear();
@@ -258,7 +306,8 @@ impl crate::planet::Surface for Under {
         let k = match free {
             Some(k) => k,
             None if s.pool.len() < POOL => {
-                let Some(n) = s.colours.as_ref().and_then(|c| surface(w, h, &c.0.space)) else { return };
+                let Some(c) = s.colours.as_ref() else { return self.give_up("no colour matching") };
+                let Some(n) = surface(w, h, &c.0.space) else { return self.give_up("no IOSurface") };
                 s.pool.push(Buffer { surface: AnyThread(n), held: vec![0; rgba.len()] });
                 s.pool.len() - 1
             }
@@ -280,6 +329,7 @@ impl crate::planet::Surface for Under {
                 st.report();
             }
         }
+        true
     }
 
     // utility QoS puts the drawing on the efficiency cores, at about half the energy
