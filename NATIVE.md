@@ -92,3 +92,25 @@ npx tauri dev --features rust-core,native-renderer      # macOS: with "native_re
 ### The pixel proof
 
 `the_painter_draws_what_game_js_draws` (in `planet.rs`, needs node, runs on arm64 macOS: game.js's maths is V8's there) draws 28 scenes with game.js headless (`game/rust/difftest/frame.js` through `scripts/frame.cjs`, which adds window mode: `WIDGET` on, `BARE` off) and with the painter, at the widget's canvas sizes: floating small, medium and large (300×261, 400×356, 560×516 CSS px, the dock's band cut off; 2× at large) and the ring layout's full 400×400; window mode inside its border (398×398, 558×558) and resized freely (640×420). They cover no clouds and every cloud shape at amounts 1-5, the worlds, snake way (the run and the arrival), the arena, shenron, the great ape, a raid, the cooler movie, another hero's form and instant transmission. Every one matches game.js byte for byte, as do planet-render's own widget cases in its framediff. `a_tick_draws_its_last_step` checks the tick: only a tick's last step draws, the message asks for the frame then, `planet_pixels` hands over exactly that frame, and the game and its random draws come out as a game stepped and drawn by hand.
+
+### What it costs (stage 5b)
+
+Release builds (`--no-sign`, bundle id `com.highskore.idlefighterz.agenttest`), medium, default settings (30fps, clouds on hover, notifications and the menu-bar number on), on a Retina display. Each run launches the app, waits 25 s, then reads `proc_pid_rusage` (CPU time, wakeups, energy) of the app and the WebKit processes it started over 60 s. Idle: the pointer away. Hovered: the pointer kept over the widget (so the web view draws at 60fps; the Rust core steps and draws at 30, its fixed step). Hidden: × after 8 s. The builds ran interleaved, four rounds of idle and hovered and two hidden; the machine was busy throughout (load 9-16 on 10 cores, from other work), so expect a few points of noise. "Canvas" is `rust-core` alone (the same binary as the layer, without the setting).
+
+| | CPU, whole widget | energy | wakeups/s | of which the app | of which WebContent |
+|---|---|---|---|---|---|
+| web view, idle | 12.7% | 190 mW | 339 | 2.4% | 7.7% |
+| canvas, idle | 16.3% | 207 mW | 364 | 7.2% | 6.3% |
+| layer, idle | 10.8% | 217 mW | 329 | 7.9% | 2.6% |
+| web view, hovered | 24.4% | 366 mW | 374 | 2.7% | 15.2% |
+| canvas, hovered | 17.9% | 207 mW | 359 | 7.6% | 6.8% |
+| layer, hovered | 10.5% | 246 mW | 327 | 7.2% | 2.7% |
+| web view, hidden | 0.4% | 1.7 mW | 17 | | |
+| canvas, hidden | 0.4% | 2.8 mW | 12 | | |
+| layer, hidden | 0.3% | 2.7 mW | 3 | | |
+
+- The layer takes the drawing out of WebKit: WebContent drops from 8-15% to under 3%, and the widget's CPU is the lowest of the three, idle and hovered. Its energy isn't lower yet: the app's tick thread draws on the performance cores, where game.js in WebContent ran cheaper per CPU-second. Moving the tick to the utility QoS class looked like a win (7% and 90 mW) until the frame counters showed why: its sleeps ran long, and it drew 12-14 frames a second instead of 30. That's reverted; the tick now wakes half a step after its step is due, so it draws 30 (15 in battery saver) a second, checked with `IDLE_FIGHTERZ_NATIVE_STATS`.
+- The canvas path costs more CPU than the web view idle (a frame copied over IPC and put on the canvas, 30 times a second), and less hovered, where the web view draws twice as often.
+- Hidden, all three are near zero; the layer build wakes least.
+- Frame time (`IDLE_FIGHTERZ_NATIVE_STATS`, 400×356): the layer's compare, premultiply and `CGImage` 0.3-0.7 ms; the present on the main thread 0.8-1.4 ms.
+- Next steps for energy, if wanted: draw only the box that changed (px.wasm already tracks it), and hand the layer an `IOSurface` rather than a new `CGImage` each frame.
