@@ -218,8 +218,8 @@ jobs:
           $p = Start-Process $exe.FullName -PassThru
           Remove-Item Env:IDLE_FIGHTERZ_SMOKE
           Start-Sleep 20
+          Get-Content "$env:RUNNER_TEMP\smoke.log" -ErrorAction SilentlyContinue
           if ($p.HasExited) { throw "exited with $($p.ExitCode)" }
-          Get-Content "$env:RUNNER_TEMP\smoke.log"
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'engine: the Rust core' -Quiet)) { throw 'the game is not on the Rust core' }
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'page hidden=true away=true' -Quiet)) { throw 'hidden, the page did not see document.hidden' }
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.log" -SimpleMatch 'hidden: the core plays on' -Quiet)) { throw 'hidden, the core did not keep playing' }

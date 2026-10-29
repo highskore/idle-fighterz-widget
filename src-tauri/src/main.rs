@@ -435,6 +435,14 @@ fn open_notify_settings(app: AppHandle) {
 }
 
 fn main() {
+    // release builds abort on a panic, with no console on Windows: the smoke log says where
+    if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            smoke(&format!("panic: {info}"));
+            default(info);
+        }));
+    }
     let app = tauri::Builder::default().manage(Shown::new());
     // macOS reopens the running app itself (RunEvent::Reopen below); elsewhere a second launch would be a second
     // widget and a second tray icon, so it shows the first one's widget instead and exits
