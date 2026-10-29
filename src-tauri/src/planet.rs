@@ -501,7 +501,7 @@ mod tests {
     }
 
     fn file(name: &str) -> PathBuf {
-        let f = std::env::temp_dir().join(format!("powerrr-test-{}-{name}.json", std::process::id()));
+        let f = std::env::temp_dir().join(format!("idle-fighterz-test-{}-{name}.json", std::process::id()));
         let _ = fs::remove_file(&f);
         f
     }

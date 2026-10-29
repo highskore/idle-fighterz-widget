@@ -1,13 +1,13 @@
 # winget manifest template (default locale file)
-PackageIdentifier: highskore.Powerrr
+PackageIdentifier: highskore.IdleFighterZ
 PackageVersion: "{{VERSION}}"
 PackageLocale: en-US
 Publisher: highskore
 PublisherUrl: https://highskore.com
-PackageName: Powerrr
-PackageUrl: https://github.com/highskore/powerrr
+PackageName: Idle FighterZ
+PackageUrl: https://github.com/highskore/idle-fighterz-widget
 License: MIT
-LicenseUrl: https://github.com/highskore/powerrr/blob/main/LICENSE
+LicenseUrl: https://github.com/highskore/idle-fighterz-widget/blob/main/LICENSE
 ShortDescription: Idle Dragon Ball planet game as a desktop widget
 Tags:
   - game

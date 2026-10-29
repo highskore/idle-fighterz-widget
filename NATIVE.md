@@ -1,6 +1,6 @@
 # Native renderer
 
-Stage 5 of the Rust port. `planet-core` + `planet-render` (highskore/planet, `rust/`) will step the game and draw it into an RGBA framebuffer at the game's internal resolution. This is the shell that shows that framebuffer in the Powerrr window without a web view. Until the core lands, a stand-in source feeds it.
+Stage 5 of the Rust port. `planet-core` + `planet-render` (highskore/idle-fighterz, `rust/`) will step the game and draw it into an RGBA framebuffer at the game's internal resolution. This is the shell that shows that framebuffer in the Idle FighterZ window without a web view. Until the core lands, a stand-in source feeds it.
 
 Nothing changes for users: the code compiles only with the `native-renderer` cargo feature, and even then only a hidden setting turns it on.
 
@@ -12,7 +12,7 @@ npx tauri build --bundles app --features native-renderer
 # in ~/Library/Application Support/<bundle id>/settings.json:
 #   "native_renderer": "planet"    recorded planet frames, looped at 12fps
 #   "native_renderer": "pattern"   an animated test pattern that changes every frame
-POWERRR_NATIVE_STATS=1 src-tauri/target/release/bundle/macos/Powerrr.app/Contents/MacOS/powerrr   # frame-time counters on stderr every 5 s
+IDLE_FIGHTERZ_NATIVE_STATS=1 "src-tauri/target/release/bundle/macos/Idle FighterZ.app/Contents/MacOS/idle-fighterz"   # frame-time counters on stderr every 5 s
 ```
 
 The setting is read straight from the file at launch and isn't in `DEFAULTS`, so changing any setting from the UI rewrites the file without it. Put it back to try again.
@@ -30,11 +30,11 @@ The setting is read straight from the file at launch and isn't in `DEFAULTS`, so
 
 - **softbuffer** drops alpha on macOS: its CoreGraphics backend makes its images `kCGImageAlphaNoneSkipFirst`, so the planet would sit on a black square. It would also scale on the CPU.
 - **wgpu** works (a Metal surface with `CompositeAlphaMode::PostMultiplied`), but it brings about a hundred crates, a Metal device and a render pipeline to do one nearest-neighbour blit of a small texture, which is what a `CALayer` with a nearest filter already is. It's the better choice once the renderer itself moves to the GPU, or for Windows and Linux.
-- **CALayer**: about 200 lines with the `objc2` crates Powerrr already depends on (three more of the same family, plus `png` for the stand-in; all already in the lockfile through Tauri), and no work for the window server when the frame doesn't change. macOS only, like the rest of the widget's native code; on other platforms the feature compiles to nothing.
+- **CALayer**: about 200 lines with the `objc2` crates Idle FighterZ already depends on (three more of the same family, plus `png` for the stand-in; all already in the lockfile through Tauri), and no work for the window server when the frame doesn't change. macOS only, like the rest of the widget's native code; on other platforms the feature compiles to nothing.
 
 ## Measurements
 
-Release builds (`--no-sign`, bundle id `com.highskore.powerrr.agenttest`, built with `CARGO_BUILD_JOBS=2 nice -n 15`), medium size on a Retina display, pointer away from the widget. Each run launches the binary, waits 8 s, then takes the CPU time used over 30 s by the app and every WebKit process it started (`ps` cumulative time), as % of one core. Three rounds, interleaved; another agent's builds were running on the machine, so expect a point or two of noise.
+Release builds (`--no-sign`, bundle id `com.highskore.idlefighterz.agenttest`, built with `CARGO_BUILD_JOBS=2 nice -n 15`), medium size on a Retina display, pointer away from the widget. Each run launches the binary, waits 8 s, then takes the CPU time used over 30 s by the app and every WebKit process it started (`ps` cumulative time), as % of one core. Three rounds, interleaved; another agent's builds were running on the machine, so expect a point or two of noise.
 
 | | round 1 | round 2 | round 3 | mean |
 |---|---|---|---|---|
@@ -44,7 +44,7 @@ Release builds (`--no-sign`, bundle id `com.highskore.powerrr.agenttest`, built 
 
 In the native runs the WebKit processes, parked on `about:blank`, used nothing measurable. So the native path costs about a fifth of the web view's CPU while stepping at 60 Hz, against a web view that only draws at 15fps when idle.
 
-Frame time, from `POWERRR_NATIVE_STATS` (5 s windows):
+Frame time, from `IDLE_FIGHTERZ_NATIVE_STATS` (5 s windows):
 
 | | presents/s | step + compare + premultiply + CGImage (loop thread) | present (main thread) |
 |---|---|---|---|

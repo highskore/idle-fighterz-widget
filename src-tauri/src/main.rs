@@ -320,7 +320,7 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
-// widget.js says whether it's hidden and stepping the game headless; with POWERRR_SMOKE=<file> (the CI smoke tests)
+// widget.js says whether it's hidden and stepping the game headless; with IDLE_FIGHTERZ_SMOKE=<file> (the CI smoke tests)
 // that goes to the file, and the widget hides itself 8 s after launch
 #[tauri::command]
 fn page_state(hidden: bool, away: bool, ticking: bool) {
@@ -329,7 +329,7 @@ fn page_state(hidden: bool, away: bool, ticking: bool) {
 
 fn smoke(line: &str) {
     use std::io::Write;
-    let Some(f) = std::env::var_os("POWERRR_SMOKE") else { return };
+    let Some(f) = std::env::var_os("IDLE_FIGHTERZ_SMOKE") else { return };
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(f) {
         let _ = writeln!(f, "{line}");
     }
@@ -489,7 +489,7 @@ fn main() {
             if let Some(src) = saved.as_ref().and_then(native::wanted) {
                 native::start(app.handle(), src, fps)?;
             }
-            if std::env::var_os("POWERRR_SMOKE").is_some() {
+            if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
                 let app = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(8));
