@@ -1721,6 +1721,7 @@ name = "idle-fighterz"
 version = "0.1.1"
 dependencies = [
  "block2",
+ "chrono",
  "gtk",
  "objc2",
  "objc2-core-foundation",

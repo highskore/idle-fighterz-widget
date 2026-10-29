@@ -2,7 +2,7 @@
 // The power planet as a desktop pet: one frameless, transparent window showing the bundled page, a settings
 // window, and a menu-bar icon. Settings are app config in a JSON file; the game itself is never saved.
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::{mpsc::Sender, Mutex}};
+use std::{fs, path::PathBuf, sync::{mpsc::Sender, Condvar, Mutex}, time::Duration};
 use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -57,6 +57,48 @@ struct State {
     transparent: bool,    // false on a Linux desktop with no compositor: floating can't work, so it's always window mode
     wayland: bool,        // no global shortcut and no pointer polling there
     tray_nudge: Mutex<Option<Sender<()>>>, // wakes the tray icon's watcher (Windows, Linux) when settings change
+    #[cfg(feature = "rust-core")]
+    sent: Mutex<std::collections::HashMap<&'static str, std::time::Instant>>, // the hidden game's last notification of each kind
+}
+
+// whether the widget is on screen. threads that only work for a shown widget wait on this instead of polling the
+// window (every is_visible() is a round trip through the main thread)
+struct Shown {
+    on: Mutex<(bool, u64)>, // shown, and a count of changes (to it or to the settings)
+    changed: Condvar,
+}
+
+impl Shown {
+    fn new() -> Self {
+        Shown { on: Mutex::new((true, 0)), changed: Condvar::new() }
+    }
+    fn set(&self, on: bool) {
+        let mut s = self.on.lock().unwrap();
+        *s = (on, s.1 + 1);
+        self.changed.notify_all();
+    }
+    /// wakes a nap: the settings changed
+    fn poke(&self) {
+        self.on.lock().unwrap().1 += 1;
+        self.changed.notify_all();
+    }
+    fn get(&self) -> bool {
+        self.on.lock().unwrap().0
+    }
+    /// blocks until the widget shows
+    fn wait(&self) {
+        drop(self.changed.wait_while(self.on.lock().unwrap(), |s| !s.0));
+    }
+    /// blocks for `d` (None: for good), or until the widget shows or the settings change
+    #[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+    fn nap(&self, d: Option<Duration>) {
+        let s = self.on.lock().unwrap();
+        let n = s.1;
+        match d {
+            Some(d) => drop(self.changed.wait_timeout_while(s, d, |s| !s.0 && s.1 == n)),
+            None => drop(self.changed.wait_while(s, |s| !s.0 && s.1 == n)),
+        }
+    }
 }
 
 // the defaults with a saved file over them
@@ -130,6 +172,7 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         let _ = if on { auto.enable() } else { auto.disable() };
     }
     apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
+    app.state::<Shown>().poke();
     // only a new pick: on Linux every check is a D-Bus call, and a slider drag sends a burst of updates
     if settings.get("tray_icon").is_some() {
         if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
@@ -232,6 +275,14 @@ fn tray_title(app: AppHandle, text: String) {
 fn show_widget(app: &AppHandle, show: bool) {
     let win = app.get_webview_window("main").expect("main window");
     let _ = if show { win.show() } else { win.hide() }; // hidden, the page gets no animation frames and stops drawing
+    // WebView2 doesn't hear that its window hid: unless told, the page stays "visible" and keeps drawing
+    #[cfg(target_os = "windows")]
+    let _ = win.with_webview(move |w| unsafe {
+        let _ = w.controller().SetIsVisible(show);
+    });
+    app.state::<Shown>().set(show);
+    // and the page hears it from the app too, wherever document.hidden doesn't follow the window
+    let _ = win.emit("shown", show);
     let item = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.show.clone());
     if let Some(item) = item {
         let _ = item.set_text(if show { "Hide Planet" } else { "Show Planet" });
@@ -267,6 +318,80 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
 fn quit(app: AppHandle) {
     let _ = app.save_window_state(StateFlags::POSITION);
     app.exit(0);
+}
+
+// widget.js says whether it's hidden and stepping the game headless; with IDLE_FIGHTERZ_SMOKE=<file> (the CI smoke tests)
+// that goes to the file, and the widget hides itself 8 s after launch
+#[tauri::command]
+fn page_state(hidden: bool, away: bool, ticking: bool) {
+    smoke(&format!("page hidden={hidden} away={away} ticking={ticking}"));
+}
+
+fn smoke(line: &str) {
+    use std::io::Write;
+    let Some(f) = std::env::var_os("IDLE_FIGHTERZ_SMOKE") else { return };
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(f) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+// a hidden widget keeps playing if anything shows it: a notification or the power level in the menu bar (widget.js
+// decides the same for game.js)
+#[cfg(feature = "rust-core")]
+fn plays_hidden(app: &AppHandle) -> bool {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    s["menubar_power"].as_bool().unwrap_or(true) || s["notify"].as_object().is_some_and(|n| n.values().any(|v| v.as_bool() == Some(true)))
+}
+
+// a hidden catch-up of the game on the Rust core: the menu-bar power level and notifications, as widget.js would
+#[cfg(feature = "rust-core")]
+fn hidden_tick(app: &AppHandle, caught: planet::Caught) {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    let power = planet::short(caught.pl);
+    if s["menubar_power"].as_bool().unwrap_or(true) && *app.state::<State>().power.lock().unwrap() != power {
+        tray_title(app.clone(), power);
+    }
+    for (kind, arg) in caught.notes {
+        notify_hidden(app, &s, kind, &arg);
+    }
+}
+
+// widget.js's notifications: each kind its own toggle, none in quiet hours, at most one a minute per kind
+#[cfg(feature = "rust-core")]
+fn notify_hidden(app: &AppHandle, s: &Value, kind: &'static str, arg: &str) {
+    use chrono::Timelike;
+    let mins = |hm: &Value| {
+        let hm = hm.as_str().unwrap_or("");
+        let mut p = hm.split(':').map(|x| x.trim().parse::<u32>().unwrap_or(0));
+        p.next().unwrap_or(0) * 60 + p.next().unwrap_or(0)
+    };
+    let q = &s["quiet"];
+    if q["on"].as_bool().unwrap_or(false) {
+        let t = chrono::Local::now();
+        let (now, a, b) = (t.hour() * 60 + t.minute(), mins(&q["from"]), mins(&q["to"]));
+        if if a <= b { now >= a && now < b } else { now >= a || now < b } {
+            return;
+        }
+    }
+    if !s["notify"][kind].as_bool().unwrap_or(false) {
+        return;
+    }
+    let (title, body) = match kind {
+        "raid" => (format!("{arg} is attacking"), "tap him before he gets away"),
+        "shenron" => ((if arg == "porunga" { "porunga awakens" } else { "the eternal dragon awakens" }).into(), "make your wish"),
+        "trip" => (format!("off to {arg}"), "a space pod takes you there"),
+        "pod" => ("a saiyan space pod".into(), "tap it for ×2"),
+        "ascend" => ("you can ascend".into(), "reset for ki seeds and a lasting boost"),
+        _ => return,
+    };
+    let state = app.state::<State>();
+    let mut sent = state.sent.lock().unwrap();
+    if sent.get(kind).is_some_and(|t| t.elapsed() < Duration::from_secs(60)) {
+        return;
+    }
+    sent.insert(kind, std::time::Instant::now());
+    drop(sent);
+    notify(app.clone(), title, body.into());
 }
 
 #[tauri::command]
@@ -308,7 +433,7 @@ fn open_notify_settings(app: AppHandle) {
 }
 
 fn main() {
-    let app = tauri::Builder::default();
+    let app = tauri::Builder::default().manage(Shown::new());
     // macOS reopens the running app itself (RunEvent::Reopen below); elsewhere a second launch would be a second
     // widget and a second tray icon, so it shows the first one's widget instead and exits
     #[cfg(not(target_os = "macos"))]
@@ -321,7 +446,7 @@ fn main() {
     let app = app.plugin(tauri_plugin_notification::init());
     macro_rules! handler {
         ($($m:ident)::+) => {
-            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings]
+            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings, page_state]
         };
     }
     #[cfg(not(feature = "rust-core"))]
@@ -337,7 +462,7 @@ fn main() {
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None) });
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default() });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
             // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
@@ -354,9 +479,7 @@ fn main() {
             {
                 app.manage(planet::Core::new(planet::seed(), app.path().app_data_dir()?.join("power.json")));
                 main.navigate(main.url()?.join("hud.html")?)?;
-                planet::run(app.handle().clone(), |app| {
-                    app.state::<State>().settings.lock().unwrap()["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0)
-                });
+                planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
             }
             if !wayland {
                 watch_pointer(app.handle().clone());
@@ -364,7 +487,16 @@ fn main() {
             // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
             #[cfg(all(target_os = "macos", feature = "native-renderer"))]
             if let Some(src) = saved.as_ref().and_then(native::wanted) {
-                native::start(app.handle(), src)?;
+                native::start(app.handle(), src, fps)?;
+            }
+            if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
+                let app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(8));
+                    let h = app.clone();
+                    let _ = app.run_on_main_thread(move || show_widget(&h, false));
+                    smoke("hid the widget");
+                });
             }
             Ok(())
         })
@@ -382,6 +514,12 @@ fn main() {
             }
             let _ = (app, e);
         });
+}
+
+// the frame-rate setting: 15, 30 (the default) or 60
+#[cfg_attr(not(any(feature = "rust-core", all(target_os = "macos", feature = "native-renderer"))), allow(dead_code))]
+fn fps(app: &AppHandle) -> f64 {
+    app.state::<State>().settings.lock().unwrap()["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0)
 }
 
 // on X11 with no compositing manager, transparent pixels come out black: the widget then sticks to window mode
@@ -412,20 +550,20 @@ fn wayland(_: &tauri::WebviewWindow) -> bool {
 }
 
 // an inactive window gets no mouse-moved events, so the page couldn't tell it's being hovered: tell it, 8 times a second
+// while it shows
 fn watch_pointer(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last = None;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            let Some(w) = app.get_webview_window("main") else { continue };
-            if !w.is_visible().unwrap_or(false) {
+            app.state::<Shown>().wait(); // hidden, nothing to hover: no polling at all
+            std::thread::sleep(Duration::from_millis(120));
+            if !app.state::<Shown>().get() {
                 continue;
             }
+            let Some(w) = app.get_webview_window("main") else { continue };
             let (Ok(c), Ok(p), Ok(s), Ok(f)) = (app.cursor_position(), w.outer_position(), w.outer_size(), w.scale_factor()) else { continue };
             let (x, y) = ((c.x - p.x as f64) / f, (c.y - p.y as f64) / f);
             let inside = x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
-            #[cfg(feature = "rust-core")]
-            app.state::<planet::Core>().hovered.store(inside, std::sync::atomic::Ordering::Relaxed);
             let now = inside.then_some((x.round() as i32, y.round() as i32));
             if now != last {
                 let _ = w.emit("pointer", json!({ "inside": inside, "x": x, "y": y }));
@@ -673,7 +811,7 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "planet_start", "planet_buy"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "planet_start", "planet_buy", "planet_fps"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
         for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "planet_step", "planet_load", "planet_save"] {
@@ -682,7 +820,7 @@ mod tests {
         for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "planet_start", "planet_buy"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "planet_start", "planet_buy", "planet_fps"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
         }
     }

@@ -24,7 +24,7 @@ Your hero runs laps around a pixel-art planet, powers up while you work, and fig
 - **Power level in the menu bar.** A pixel-art scouter with your number next to it, updated about once a second.
 - **Plays itself.** Your hero keeps training while you work. Click to train harder, drag to spin the planet, hold to charge a beam.
 - **Notifications that matter.** Villain raids, the dragon, trips and ascends can each notify you, with quiet hours, and never while you're looking at the widget.
-- **Light on your machine.** The heavy pixel work runs in WebAssembly. It draws at 30 fps while idle and 60 fps while you hover over it, and you can switch to battery saver. Hidden, it pauses, or ticks along at about 1% CPU if you want notifications.
+- **Light on your machine.** The heavy pixel work runs in WebAssembly. It draws at 30 fps while idle and 60 fps while you hover over it, and you can switch to battery saver. Hidden, it draws nothing and pauses, or ticks along at under 1% of one core if you want notifications or the menu-bar number.
 - **Yours to tweak.** Size, HUD layout, clouds, opacity, always-on-top, launch at login and a global show/hide shortcut.
 
 ## Install

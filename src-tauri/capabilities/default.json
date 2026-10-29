@@ -12,6 +12,7 @@
     "allow-hide-widget",
     "allow-open-settings",
     "allow-notify",
+    "allow-page-state",
     "allow-planet-start",
     "allow-planet-resend",
     "allow-planet-resize",
@@ -34,6 +35,7 @@
     "allow-planet-ascend-info",
     "allow-planet-god-info",
     "allow-planet-zeno-info",
-    "allow-planet-card"
+    "allow-planet-card",
+    "allow-planet-fps"
   ]
 }
