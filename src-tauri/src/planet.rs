@@ -63,6 +63,12 @@ pub trait Surface: Send + Sync {
     fn place(&self, rect: [f64; 4], opacity: f64, bare: bool) -> bool;
     /// A frame: RGBA8, straight alpha, rows top to bottom.
     fn show(&self, rgba: &[u8], w: u32, h: u32);
+    /// Called once on the tick thread, before it first sleeps.
+    fn tick_thread(&self) {}
+    /// The tick's sleep between frames.
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
 }
 
 /// planet-render drawing the game as the page's canvas would: its size and scale, floating or window mode, the clouds.
@@ -381,6 +387,10 @@ pub fn run(app: AppHandle, hooks: Hooks) {
         let shown = app.state::<crate::Shown>();
         let (mut last, mut saved) = (Instant::now(), Instant::now());
         let mut kept = Vec::new();
+        let surface = core.surface.get();
+        if let Some(s) = surface {
+            s.tick_thread();
+        }
         loop {
             if core.stopped() {
                 return;
@@ -392,7 +402,11 @@ pub fn run(app: AppHandle, hooks: Hooks) {
                 // doesn't find the next: every tick draws
                 let steps = (1.0 / (fps * DT)).round().max(1.0);
                 let wait = core.bank().map_or(steps * DT, |bank| steps * DT - bank + DT / 2.0);
-                std::thread::sleep(Duration::from_secs_f64(wait.clamp(0.0, 1.0)));
+                let wait = Duration::from_secs_f64(wait.clamp(0.0, 1.0));
+                match surface {
+                    Some(s) => s.sleep(wait),
+                    None => std::thread::sleep(wait),
+                }
                 let now = Instant::now();
                 let elapsed = (now - last).as_secs_f64();
                 last = now;

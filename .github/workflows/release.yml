@@ -84,6 +84,7 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo test --features rust-core
+          cargo test --features rust-core,native-renderer native::
           for f in '' rust-core native-renderer rust-core,native-renderer; do
             echo "--- clippy ${f:-default}"
             cargo clippy --all-targets ${f:+--features $f} -- -D warnings
