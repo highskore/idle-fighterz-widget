@@ -61,7 +61,7 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>) -> tauri::Result<()
         (layer, view)
     };
 
-    let stats = std::env::var_os("POWERRR_NATIVE_STATS").map(|_| Arc::new(Stats::default()));
+    let stats = std::env::var_os("IDLE_FIGHTERZ_NATIVE_STATS").map(|_| Arc::new(Stats::default()));
     let slot: Arc<Mutex<Option<MainOnly<CFRetained<CGImage>>>>> = Arc::default();
     let shared = MainOnly((layer, view, ns_window));
     let app = app.clone();
@@ -177,7 +177,7 @@ fn present(layer: &CALayer, view: &AnyObject, ns_window: *mut AnyObject, img: &C
     CATransaction::commit();
 }
 
-// frame-time counters, printed to stderr every 5 s with POWERRR_NATIVE_STATS set
+// frame-time counters, printed to stderr every 5 s with IDLE_FIGHTERZ_NATIVE_STATS set
 #[derive(Default)]
 struct Stats {
     tick: Timing,

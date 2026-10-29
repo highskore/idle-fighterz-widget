@@ -24,7 +24,7 @@ PRODUCT=$(node -p "require('./src-tauri/tauri.conf.json').productName")
 ARCH=${TARGET%%-*}
 [ "$ARCH" = aarch64 ] && ARCH=arm64
 [ "$ARCH" = x86_64 ] && ARCH=x64
-NAME="${PRODUCT// /-}_${VERSION}_${ARCH}"
+NAME="${PRODUCT// /}_${VERSION}_${ARCH}"
 OUT=release
 
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then

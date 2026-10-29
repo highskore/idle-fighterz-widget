@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const [count = 12, fps = 12] = process.argv.slice(2).map(Number)
 const chrome = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const out = join(root, 'src-tauri', 'native-frames')
-const profile = mkdtempSync(join(tmpdir(), 'powerrr-frames-'))
+const profile = mkdtempSync(join(tmpdir(), 'idle-fighterz-frames-'))
 const proc = spawn(chrome, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--hide-scrollbars', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] })
 const wsUrl = await new Promise((res, rej) => {
   let log = ''

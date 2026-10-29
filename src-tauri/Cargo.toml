@@ -1,7 +1,7 @@
 [package]
-name = "powerrr"
+name = "idle-fighterz"
 version = "0.1.1"
-description = "powerrr: the highskore planet game as a desktop widget"
+description = "idle-fighterz: the Idle FighterZ game as a desktop widget"
 edition = "2021"
 license = "MIT"
 publish = false

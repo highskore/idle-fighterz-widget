@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Powerrr",
+  "productName": "Idle FighterZ",
   "version": "0.1.1",
-  "identifier": "com.highskore.powerrr",
+  "identifier": "com.highskore.idlefighterz",
   "build": {
     "frontendDist": "../dist"
   },

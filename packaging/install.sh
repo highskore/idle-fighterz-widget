@@ -1,23 +1,20 @@
 #!/bin/sh
-# Powerrr installer: curl -fsSL https://highskore.com/install.sh | sh
-# Downloads the latest release from github.com/highskore/powerrr, checks its sha256 and puts
-# the app in /Applications (or ~/Applications if that isn't writable; POWERRR_DIR picks another).
-# On Linux (x86_64) it installs the AppImage as ~/.local/bin/powerrr (POWERRR_DIR picks another
+# Idle FighterZ installer: curl -fsSL https://highskore.com/install.sh | sh
+# Downloads the latest release from github.com/highskore/idle-fighterz-widget, checks its sha256 and puts
+# the app in /Applications (or ~/Applications if that isn't writable; IDLE_FIGHTERZ_DIR picks another).
+# On Linux (x86_64) it installs the AppImage as ~/.local/bin/idle-fighterz (IDLE_FIGHTERZ_DIR picks another
 # folder) with a menu entry. Windows: irm https://highskore.com/install.ps1 | iex
-# POWERRR_REPO picks another repo, and POWERRR_RELEASE (a release's API URL) a release other than the latest.
+# IDLE_FIGHTERZ_REPO picks another repo, and IDLE_FIGHTERZ_RELEASE (a release's API URL) a release other than the latest.
 #
 # A release's SHA256SUMS is signed with minisign (SHA256SUMS.minisig) by the release workflow. The signature is
 # checked with minisign if it's installed, else OpenSSL 3, else (macOS, whose openssl can't) JavaScriptCore through
-# osascript, so nothing needs installing. A signed release that doesn't verify is refused, and so is an unsigned one,
-# except the releases from before signing, listed below with their SHA256SUMS pinned. On macOS a Developer ID signed
-# app must also pass codesign and Gatekeeper, from the team below.
-# This file is served by highskore.com and kept as a copy in powerrr's packaging/install.sh: change both.
+# osascript, so nothing needs installing. A signed release that doesn't verify is refused, and so is an unsigned one.
+# On macOS a Developer ID signed app must also pass codesign and Gatekeeper, from the team below.
+# This file is served by highskore.com and kept as a copy in idle-fighterz-widget's packaging/install.sh: change both.
 set -eu
 
 # the minisign public key that signs SHA256SUMS (minisign.pub's second line)
 MINISIGN_PUBKEY='RWQsYREKR+Av/TIhq7yrFboAERzsd4eoUxepZrikLPg8/hrtXm7MvY1C'
-# the releases from before SHA256SUMS was signed, each with the sha256 of its SHA256SUMS: only these install unsigned
-LEGACY_SUMS='desktop-v0.1.1=dc73874f6220409f6b9443337c6a8f77b38713eb8e4ecb9530908eeaaf735ffd'
 # the Apple team ID of the Developer ID certificate that signs the macOS app; empty until builds are signed
 APPLE_TEAM_ID=''
 
@@ -27,8 +24,6 @@ b64d() { if command -v openssl >/dev/null 2>&1; then openssl base64 -d -A; else 
 hex() { od -An -v -tx1 | tr -d ' \n'; }
 size() { wc -c < "$1" | tr -d ' '; }
 cut_bytes() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null; }   # cut_bytes <file> <offset> <length>
-sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1; }
-legacy_sum() { for e in $LEGACY_SUMS; do [ "${e%%=*}" = "$1" ] && { echo "${e#*=}"; return 0; }; done; return 0; }
 
 # an OpenSSL 3 that can verify Ed25519 (macOS's own openssl is LibreSSL, which can't)
 openssl3() {
@@ -117,25 +112,18 @@ verify_sums() {
   SIGNED_COMMENT=${comment#trusted comment: }
 }
 
-# fetch_sums <SHA256SUMS url> <SHA256SUMS.minisig url, or empty>: downloads SHA256SUMS to $TMP and checks its signature,
-# or for a release from before signing, that it's the SHA256SUMS that release was published with
+# fetch_sums <SHA256SUMS url> <SHA256SUMS.minisig url, or empty>: downloads SHA256SUMS to $TMP and checks its signature
 fetch_sums() {
+  # every release is signed: deleting the .minisig must not turn one back into an unsigned one
+  [ -n "$2" ] || die "release $TAG has no SHA256SUMS.minisig, though releases are signed: not installing"
+  [ -n "$MINISIGN_PUBKEY" ] || die "this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing"
   curl -fsSL "$1" -o "$TMP/SHA256SUMS"
-  if [ -n "$2" ]; then
-    [ -n "$MINISIGN_PUBKEY" ] || die "this release's SHA256SUMS is signed, but this installer has no key to check it with: not installing"
-    curl -fsSL "$2" -o "$TMP/SHA256SUMS.minisig"
-    verify_sums "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" || die "the signature on SHA256SUMS doesn't verify: not installing"
-    # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
-    # signature, served as a newer one, are refused
-    [ "$SIGNED_COMMENT" = "powerrr $TAG" ] || die "SHA256SUMS was signed for '$SIGNED_COMMENT', not 'powerrr $TAG': not installing"
-    say "SHA256SUMS signature ok ($TAG)"
-  else
-    # without this, deleting the .minisig would turn any release back into an unsigned one
-    pinned=$(legacy_sum "$TAG")
-    [ -n "$pinned" ] || die "release $TAG has no SHA256SUMS.minisig, though releases are signed: not installing"
-    [ "$(sha256 "$TMP/SHA256SUMS")" = "$pinned" ] || die "SHA256SUMS of $TAG isn't the one it was released with: not installing"
-    say "note: unsigned checksums: $TAG is from before releases were signed; its SHA256SUMS matches the copy pinned in this installer"
-  fi
+  curl -fsSL "$2" -o "$TMP/SHA256SUMS.minisig"
+  verify_sums "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" || die "the signature on SHA256SUMS doesn't verify: not installing"
+  # the trusted comment just verified names the release it was made for: an older release's SHA256SUMS and
+  # signature, served as a newer one, are refused
+  [ "$SIGNED_COMMENT" = "idle-fighterz $TAG" ] || die "SHA256SUMS was signed for '$SIGNED_COMMENT', not 'idle-fighterz $TAG': not installing"
+  say "SHA256SUMS signature ok ($TAG)"
 }
 
 # a Developer ID signed app must verify, come from APPLE_TEAM_ID and pass Gatekeeper (SIGNED=1). An ad-hoc signed or
@@ -157,7 +145,7 @@ check_app() {
 }
 
 main() {
-  REPO=${POWERRR_REPO:-highskore/powerrr}
+  REPO=${IDLE_FIGHTERZ_REPO:-highskore/idle-fighterz-widget}
   OS=$(uname -s)
   case "$OS" in
     Darwin) ;;
@@ -168,7 +156,7 @@ main() {
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
 
-  API=${POWERRR_RELEASE:-https://api.github.com/repos/$REPO/releases/latest}
+  API=${IDLE_FIGHTERZ_RELEASE:-https://api.github.com/repos/$REPO/releases/latest}
   say "finding the release at ${API}…"
   curl -fsSL "$API" -o "$TMP/release.json" || die "couldn't reach GitHub"
   asset() { grep -o "\"browser_download_url\": *\"[^\"]*$1\"" "$TMP/release.json" | head -n 1 | sed 's/.*"\(https*:[^"]*\)"/\1/'; }
@@ -189,8 +177,8 @@ main() {
     [ -n "$WANT" ] && [ "$WANT" = "$GOT" ] || die "sha256 mismatch for $IMG (expected ${WANT:-nothing}, got $GOT)"
     say "sha256 ok"
 
-    DEST=${POWERRR_DIR:-$HOME/.local/bin}
-    BIN="$DEST/powerrr"
+    DEST=${IDLE_FIGHTERZ_DIR:-$HOME/.local/bin}
+    BIN="$DEST/idle-fighterz"
     DATA=${XDG_DATA_HOME:-$HOME/.local/share}
     mkdir -p "$DEST" "$DATA/applications" "$DATA/icons/hicolor/128x128/apps"
     pkill -f "^$BIN" 2>/dev/null && sleep 1 || true
@@ -198,14 +186,14 @@ main() {
     # the icon from the package just checked (extracting needs no FUSE)
     (cd "$TMP" && chmod +x "$IMG" && "./$IMG" --appimage-extract 'usr/share/icons/hicolor/128x128/apps/*' >/dev/null 2>&1) || true
     ICON=$(find "$TMP/squashfs-root/usr/share/icons/hicolor/128x128/apps" -name '*.png' 2>/dev/null | head -n 1)
-    [ -n "$ICON" ] && cp "$ICON" "$DATA/icons/hicolor/128x128/apps/powerrr.png"
-    cat > "$DATA/applications/powerrr.desktop" <<DESKTOP
+    [ -n "$ICON" ] && cp "$ICON" "$DATA/icons/hicolor/128x128/apps/idle-fighterz.png"
+    cat > "$DATA/applications/idle-fighterz.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Powerrr
+Name=Idle FighterZ
 Comment=The highskore planet game as a desktop widget
 Exec=$BIN
-Icon=powerrr
+Icon=idle-fighterz
 Categories=Game;
 Terminal=false
 DESKTOP
@@ -243,7 +231,7 @@ DESKTOP
   NAME=$(basename "$APP")
   check_app "$APP"
 
-  DEST=${POWERRR_DIR:-/Applications}
+  DEST=${IDLE_FIGHTERZ_DIR:-/Applications}
   [ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
   pkill -f "$NAME/Contents/MacOS/" 2>/dev/null && sleep 1 || true
   rm -rf "$DEST/$NAME"
