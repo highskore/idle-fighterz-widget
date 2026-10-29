@@ -366,25 +366,11 @@ pub struct Hooks {
     pub hidden: fn(&AppHandle, Caught),
 }
 
-// macOS: the tick (and the drawing in it) is background work, not a UI thread: at the utility QoS class the scheduler
-// may keep it on the efficiency cores
-fn utility() {
-    #[cfg(target_os = "macos")]
-    {
-        extern "C" {
-            fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
-        }
-        const QOS_CLASS_UTILITY: u32 = 0x11;
-        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
-    }
-}
-
 /// Steps the game and sends the HUD what changed, at the rate the page picks (widget.js: the frame-rate setting,
 /// doubled while awake). Hidden, it catches up once a second and the page gets nothing, or pauses as game.js does.
 /// Saves every 3 s of play, every 30 s hidden.
 pub fn run(app: AppHandle, hooks: Hooks) {
     std::thread::spawn(move || {
-        utility();
         let core = app.state::<Core>();
         let shown = app.state::<crate::Shown>();
         let (mut last, mut saved) = (Instant::now(), Instant::now());
