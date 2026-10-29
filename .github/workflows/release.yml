@@ -540,4 +540,4 @@ jobs:
           NOTE="$NAME $VERSION for macOS 11+ (Apple silicon and Intel), Windows 10+ (x64) and Linux (x86_64 AppImage and .deb)."
           [ "$MAC_SIGNED" = true ] || NOTE="$NOTE The macOS build is not notarized: right-click the app → Open the first time."
           [ "$WIN_SIGNED" = true ] || NOTE="$NOTE The Windows build is not signed: SmartScreen may say \"Windows protected your PC\"; click More info → Run anyway."
-          gh release create "$GITHUB_REF_NAME" -- * --title "$NAME $VERSION" --notes "$NOTE"
+          gh release create "$GITHUB_REF_NAME" --title "$NAME $VERSION" --notes "$NOTE" -- *
