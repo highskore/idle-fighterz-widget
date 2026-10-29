@@ -1,0 +1,2 @@
+packaging/install.sh text eol=lf
+packaging/install.ps1 text eol=lf
