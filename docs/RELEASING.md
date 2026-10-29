@@ -40,7 +40,42 @@ Push a tag like `desktop-v0.1.0` (matching `version` in `tauri.conf.json`). The 
 
 Every pull request (and a manual run from the Actions tab) builds all three, unsigned, and smoke-tests two: on Windows it runs the installer silently, starts the app and checks a second launch hands over and exits; on Linux it installs the `.deb` and runs the AppImage under Xvfb, which has no compositor, so it checks the fallback to window mode too. The packages are attached to the run as artifacts. Signing secrets are only read for `desktop-v*` tags.
 
-Secrets to add yourself (repo → Settings → Secrets and variables → Actions):
+### Where the secrets live
+
+The signing secrets are kept in a GitHub **environment** called `release`, not at repo level. Only jobs that name it can read them, and only runs from a `desktop-v*` tag can use it: the `build` and `release` jobs name it on a tag run alone, so pull requests and manual runs never get them. Within a job each secret is passed to the one step that needs it, never to the whole job: npm's install scripts, the crates' build scripts and third-party actions don't run next to any of them. The certificate import gets the certificate and its password; the macOS build gets only the identity's name; the notarizing step gets the notary credentials after the build has finished; the Windows build signs by thumbprint from the certificate store. Every third-party action is pinned to a commit.
+
+One-time setup, with `gh` (repo admin):
+
+1. Create the environment, open only to `desktop-v*` tags:
+   ```sh
+   gh api -X PUT repos/highskore/powerrr/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/highskore/powerrr/environments/release/deployment-branch-policies -f name='desktop-v*' -f type=tag
+   gh api repos/highskore/powerrr/environments/release/deployment-branch-policies   # one policy: desktop-v*, type tag
+   ```
+2. Move the secrets into it: set each one on the environment (below), then delete the repo-level copy. `gh` asks for each value, so nothing lands in your shell history:
+   ```sh
+   gh secret list -R highskore/powerrr                         # the repo-level ones to move
+   gh secret set APPLE_CERTIFICATE -R highskore/powerrr --env release   # …and so on for each secret below
+   gh secret delete APPLE_CERTIFICATE -R highskore/powerrr     # the repo-level copy, once the environment has it
+   gh secret list -R highskore/powerrr --env release
+   ```
+3. Protect the tags, so only you can create, move or delete a `desktop-v*` tag (anyone who could push one could run the release with its secrets):
+   ```sh
+   gh api -X POST repos/highskore/powerrr/rulesets --input - <<'JSON'
+   {
+     "name": "release tags",
+     "target": "tag",
+     "enforcement": "active",
+     "conditions": { "ref_name": { "include": ["refs/tags/desktop-v*"], "exclude": [] } },
+     "rules": [{ "type": "creation" }, { "type": "update" }, { "type": "deletion" }, { "type": "non_fast_forward" }],
+     "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }]
+   }
+   JSON
+   ```
+   `actor_id: 5` is the repository admin role: admins (you) can still push release tags, nobody else can.
+
+Secrets to add yourself, to the `release` environment (repo → Settings → Environments → release, or `gh secret set NAME --env release`):
 
 - [ ] `APPLE_CERTIFICATE`: the Developer ID Application certificate and its private key as a base64 `.p12`. In Keychain Access → login → My Certificates, right-click "Developer ID Application: …" → Export → `.p12` with a password, then `base64 -i cert.p12 | pbcopy`.
 - [ ] `APPLE_CERTIFICATE_PASSWORD`: the password you gave the `.p12`.
@@ -88,11 +123,30 @@ The installers are served from the highskore.com repo as `https://highskore.com/
 curl -fsSL https://highskore.com/install.sh | sh
 ```
 
-On macOS it fetches the latest release of `highskore/powerrr`, checks the zip against `SHA256SUMS`, copies the app to `/Applications` (or `~/Applications`) and opens it. curl doesn't quarantine what it downloads, so even a build that isn't notarized opens; it says so, and that a browser download of such a build needs right-click → Open. On Linux it checks the AppImage the same way and installs it as `~/.local/bin/powerrr`, with a menu entry and icon. `install.ps1` checks the `-setup.exe` and runs it silently (per user, no admin). `packaging/install.ps1` is a copy of it, which CI (the `install-ps1` job) runs in Windows PowerShell on every build: it must refuse a wrong checksum, install the build, reinstall over the running app and uninstall cleanly, then it runs against the latest release. CI warns when the copy and the site differ. `POWERRR_RELEASE`, a release's API URL, points it at a release other than the latest.
+On macOS it fetches the latest release of `highskore/powerrr`, checks the zip against `SHA256SUMS`, copies the app to `/Applications` (or `~/Applications`) and opens it. curl doesn't quarantine what it downloads, so even a build that isn't notarized opens; it says so, and that a browser download of such a build needs right-click → Open. On Linux it checks the AppImage the same way, installs it as `~/.local/bin/powerrr` and adds a menu entry, with the icon taken from the AppImage it just checked. `install.ps1` checks the `-setup.exe`, runs it silently (per user, no admin) and starts `powerrr.exe`; it refuses an elevated (admin) PowerShell unless `POWERRR_ALLOW_ADMIN=1`. `POWERRR_RELEASE`, a release's API URL, points either at a release other than the latest.
+
+`packaging/install.sh` and `packaging/install.ps1` are copies of the two, and must stay byte-identical to the site's: CI warns when they differ, and on a `desktop-v*` tag the difference fails the run, before anything is released. Change both repos together. CI runs `install.ps1` in Windows PowerShell on every build (the `install-ps1` job), and `install.sh` on macOS and Linux (the `install-sh` job, `scripts/test-install-sh.sh`).
+
+### Signed checksums
+
+A `SHA256SUMS` from the same release as the download only catches a broken download: whoever can change the release can change both. So the release workflow signs `SHA256SUMS` with [minisign](https://jedisct1.github.io/minisign/) into `SHA256SUMS.minisig`, and the installers check it against the public key they carry, which an attacker on GitHub can't change. A signature that doesn't verify is refused, and so is a release with no `SHA256SUMS.minisig` (deleting it would otherwise turn a release back into an unsigned one). The one exception is the releases from before signing, `desktop-v0.1.1` (`desktop-v0.1.0` never had a release): they're listed in `LEGACY_SUMS` (`install.sh`) and `$LegacySums` (`install.ps1`) with the sha256 of their `SHA256SUMS`, and install, with a note, only if that file is unchanged. That also means every new release must be signed: the `release` job fails without `MINISIGN_SECRET_KEY`.
+
+- **The key.** It exists: the private half is `~/.minisign/powerrr.key` on your Mac, and it is in the `release` environment as `MINISIGN_SECRET_KEY` (the key file, or just its second line) with `MINISIGN_PASSWORD` (its password, if it has one). Only the `sign SHA256SUMS` step of the `release` job gets them. The public key is `RWQsYREKR+Av/TIhq7yrFboAERzsd4eoUxepZrikLPg8/hrtXm7MvY1C`, in `MINISIGN_PUBKEY` at the top of `install.sh` (line 18) and `$MinisignPublicKey` in `install.ps1` (line 19), in both repos. Keep a backup of the private key (and its password) offline: without it no release can be signed for these installers.
+- **The format.** The workflow signs with `minisign -S -l` (the legacy format: Ed25519 over the file itself, not over its BLAKE2b hash), so the installers can verify it without minisign. `install.sh` uses `minisign` if it's installed, else OpenSSL 3 (`pkeyutl -verify -rawin` on the raw key), else, on macOS, whose `openssl` is LibreSSL without Ed25519, a short RFC 8032 verifier run by JavaScriptCore through `osascript` (always there, BigInt since macOS 11); with none of them (a Linux without OpenSSL 3) it stops and says to install minisign. `install.ps1` verifies Ed25519 itself in PowerShell (`System.Numerics.BigInteger` and .NET's SHA-512). Both check the trusted comment's signature too, and that the signature's key ID is the embedded key's. The workflow signs with the trusted comment `powerrr <tag>` (e.g. `powerrr desktop-v0.2.0`), and the installers refuse a signature whose comment doesn't name exactly the release they're installing: an older release's genuinely signed `SHA256SUMS`, served as a newer one, would otherwise install the older build. `scripts/test-install-sh.sh` and the `install-ps1` job make a throwaway key, sign a stand-in `SHA256SUMS` with it, and check each verifier accepts it and refuses a changed file, comment or key.
+- **A new key** (if the old one is lost or leaks): `minisign -G -p powerrr.pub -s ~/.minisign/powerrr.key`, then `gh secret set MINISIGN_SECRET_KEY -R highskore/powerrr --env release < ~/.minisign/powerrr.key` and `gh secret set MINISIGN_PASSWORD -R highskore/powerrr --env release`, then paste the second line of `powerrr.pub` into the four installer copies (the lines above), and ship the installers before the next release.
+
+### Code signatures
+
+Once builds are signed, the installers check that too, before installing:
+
+- **macOS**: an app signed with a Developer ID must pass `codesign --verify --deep --strict`, be signed by the team in `APPLE_TEAM_ID` (`install.sh`, line 22) and pass `spctl --assess` (Gatekeeper, so it must be notarized), or it's refused. An app with a Developer ID signature and no `APPLE_TEAM_ID` in the installer is refused too, so fill it in (your 10-character Team ID, as in `Developer ID Application: Your Name (TEAMID)`) before the first signed release. Until it's set, ad-hoc signed builds install as before, with the note; once it's set, a build without a Developer ID signature is refused, so set it when the macOS builds are signed for good.
+- **Windows**: with `$SignerThumbprint` and/or `$SignerSubject` set (`install.ps1`, lines 24 and 25), the `-setup.exe` must have a `Valid` Authenticode signature from that certificate (`Get-AuthenticodeSignature`), or it's refused: an unsigned one too. The thumbprint changes when the certificate is renewed and the subject doesn't, so the subject alone is the easier one to keep (`(Get-PfxCertificate cert.pfx).Subject` prints it). Unset, a valid signature's signer is printed and nothing is required.
+
+The scoop manifest's `hash` is all zeros until a release fills it in; that fails closed (Scoop refuses the download), so it's fine to leave as is.
 
 ## First release, in order
 
 1. Create the public repo `highskore/homebrew-tap` (empty, with a `Casks/` folder).
-2. Add the secrets above to `highskore/powerrr`.
+2. Set up the `release` environment and the tag ruleset, and add the secrets above to the environment (see "Where the secrets live").
 3. Set `version` in `src-tauri/tauri.conf.json` (and `package.json`, `Cargo.toml`), commit, tag `desktop-v<version>`, push the tag. Watch the workflow; download the dmg and check `spctl -a -vv "/Volumes/Powerrr/Powerrr.app"`.
 4. Run `packaging/bump-cask.sh <version> <tap checkout>`, push the tap, then try `brew install --cask highskore/tap/powerrr` and the curl line.

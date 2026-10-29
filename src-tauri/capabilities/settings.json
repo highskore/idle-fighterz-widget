@@ -1,7 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "the settings window draws its own title bar: it drags and closes itself",
+  "description": "the settings window: draws its own title bar (drags and closes itself), hears settings and permission events, and reads and changes the settings",
   "windows": ["settings"],
-  "permissions": ["core:window:allow-start-dragging", "core:window:allow-close"]
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-notify-permission",
+    "allow-request-notify-permission",
+    "allow-open-notify-settings",
+    "allow-quit"
+  ]
 }

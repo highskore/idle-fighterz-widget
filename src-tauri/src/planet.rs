@@ -10,6 +10,7 @@ use planet_core::{
 };
 use std::{
     fs,
+    io::Read,
     panic::AssertUnwindSafe,
     path::PathBuf,
     sync::Mutex,
@@ -34,6 +35,8 @@ const HIDDEN_SAVE: Duration = Duration::from_secs(30);
 pub struct Core {
     bridge: Mutex<Bridge>,
     file: PathBuf,
+    // true once the app is exiting: held across every write, so the exit save is the last one and none interleave
+    stopped: Mutex<bool>,
     /// the rate the page's widget.js picked (awake, the frame-rate setting), 0 until it says
     fps: Mutex<f64>,
 }
@@ -48,14 +51,14 @@ impl Core {
     /// A new game seeded with `seed`, carrying over what the save in `file` keeps (its daily bonus date).
     pub fn new(seed: u32, file: PathBuf) -> Self {
         let mut bridge = Bridge::new(seed, SIZE.0, SIZE.1, SIZE.2);
-        let small = fs::metadata(&file).is_ok_and(|m| m.len() <= MAX_SAVE as u64);
-        if let Some(saved) = small.then(|| fs::read_to_string(&file).ok()).flatten().filter(|s| loadable(s)) {
+        if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
-        Core { bridge: Mutex::new(bridge), file, fps: Mutex::new(0.0) }
+        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0) }
     }
 
-    // a panic in the game fails the one call (debug builds; release aborts on panic) and leaves the game usable
+    // only in debug builds does a panic in the game fail just the one call: release builds have panic = "abort", so
+    // there it ends the app and this catches nothing
     fn with<T>(&self, f: impl FnOnce(&mut Bridge) -> T) -> Result<T, String> {
         let mut b = self.bridge.lock().unwrap_or_else(|e| e.into_inner());
         std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut b))).map_err(|e| {
@@ -117,11 +120,46 @@ impl Core {
         self.with(|b| can_ascend(&b.game)).unwrap_or(false)
     }
 
+    /// Saves, unless the app is exiting (then `stop` has saved for the last time).
     pub fn save(&self) {
+        let stopped = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        if !*stopped {
+            self.write();
+        }
+    }
+
+    /// Stops the tick thread's saves and saves once more, on exit.
+    pub fn stop(&self) {
+        let mut stopped = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        if !*stopped {
+            *stopped = true;
+            self.write();
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        *self.stopped.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // to a temp file renamed into place, so a crash or a full disk mid-write leaves the old save whole
+    fn write(&self) {
         let Ok(text) = self.with(|b| b.game.save_json()) else { return };
         let _ = fs::create_dir_all(self.file.parent().unwrap());
-        let _ = fs::write(&self.file, text);
+        let tmp = self.file.with_extension("json.tmp");
+        if fs::write(&tmp, text).is_err() || fs::rename(&tmp, &self.file).is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
     }
+}
+
+// the save, if it's a regular file (not a link) of at most MAX_SAVE bytes, read through a cap in case it grows meanwhile
+fn read_save(file: &PathBuf) -> Option<String> {
+    if !fs::symlink_metadata(file).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut text = String::new();
+    fs::File::open(file).ok()?.take(MAX_SAVE as u64 + 1).read_to_string(&mut text).ok()?;
+    (text.len() <= MAX_SAVE).then_some(text)
 }
 
 // at most MAX_SAVE bytes and MAX_DEPTH levels of [ and {, outside strings
@@ -198,6 +236,9 @@ pub fn run(app: AppHandle, hooks: Hooks) {
         let (mut last, mut saved) = (Instant::now(), Instant::now());
         let mut kept = Vec::new();
         loop {
+            if core.stopped() {
+                return;
+            }
             if shown.get() {
                 let fps = Some(*core.fps.lock().unwrap()).filter(|f| *f > 0.0).unwrap_or_else(|| (hooks.idle_fps)(&app));
                 std::thread::sleep(Duration::from_secs_f64(1.0 / fps));
@@ -215,6 +256,9 @@ pub fn run(app: AppHandle, hooks: Hooks) {
             }
             let mut ascend = core.can_ascend();
             loop {
+                if core.stopped() {
+                    return;
+                }
                 let plays = (hooks.plays_hidden)(&app);
                 shown.nap(plays.then_some(HIDDEN_TICK));
                 let now = Instant::now();
@@ -283,7 +327,8 @@ impl<R: Renderer> crate::native::FrameSource for Frames<R> {
 }
 
 // ── the calls (HUD.md's table), as `planet_<call>` with HUD.md's argument names. `new` is the app's (the game outlives
-// the page), and `spots`/`probe` were the web's lockstep twin's
+// the page), and `spots`/`probe` were the web's lockstep twin's. The app steps, frames and saves the game itself, so
+// `load`, `step`, `step_one`, `frame`, `save` and `playing` aren't the page's to call
 
 // a HUD page loaded again mounts again: the game carries on
 // widget.js's frame rate for the shown widget
@@ -295,32 +340,6 @@ pub fn planet_fps(core: State<'_, Core>, fps: f64) {
 #[tauri::command(rename_all = "snake_case")]
 pub fn planet_start(core: State<'_, Core>, today: String, now_ms: f64) -> Result<(), String> {
     core.with(|b| if !b.game.playing { b.start(&today, now_ms) })
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_load(core: State<'_, Core>, text: String) -> Result<(), String> {
-    if !loadable(&text) {
-        return Err("not a save".into());
-    }
-    core.with(|b| b.load(&text))
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_step(core: State<'_, Core>, elapsed: f64, now_ms: f64) -> Result<u32, String> {
-    core.with(|b| b.step(elapsed, now_ms))
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn planet_step_one(core: State<'_, Core>, now_ms: f64) -> Result<f64, String> {
-    core.with(|b| {
-        b.clock(now_ms);
-        b.step_one()
-    })
-}
-
-#[tauri::command]
-pub fn planet_frame(core: State<'_, Core>) -> Result<String, String> {
-    core.with(|b| b.frame_json())
 }
 
 #[tauri::command]
@@ -433,28 +452,17 @@ pub fn planet_card(core: State<'_, Core>) -> Result<String, String> {
     core.with(|b| b.game.card_json())
 }
 
-#[tauri::command]
-pub fn planet_save(core: State<'_, Core>) -> Result<String, String> {
-    core.with(|b| b.game.save_json())
-}
-
-#[tauri::command]
-pub fn planet_playing(core: State<'_, Core>) -> Result<bool, String> {
-    core.with(|b| b.game.playing)
-}
-
 /// Every `planet_*` command, for `invoke_handler` (main.rs adds the app's own).
 macro_rules! planet_commands {
     ($($more:path),* $(,)?) => {
         tauri::generate_handler![
             $($more,)*
-            crate::planet::planet_start, crate::planet::planet_load, crate::planet::planet_step, crate::planet::planet_step_one, crate::planet::planet_frame,
-            crate::planet::planet_resend, crate::planet::planet_resize, crate::planet::planet_pointer_down, crate::planet::planet_pointer_move,
+            crate::planet::planet_start, crate::planet::planet_resend, crate::planet::planet_resize, crate::planet::planet_pointer_down, crate::planet::planet_pointer_move,
             crate::planet::planet_pointer_up, crate::planet::planet_pointer_cancel, crate::planet::planet_key, crate::planet::planet_train,
             crate::planet::planet_kaioken, crate::planet::planet_buy, crate::planet::planet_learn, crate::planet::planet_respec, crate::planet::planet_learn_angel,
             crate::planet::planet_auto_next, crate::planet::planet_pick_wish, crate::planet::planet_pick_hero, crate::planet::planet_menu,
             crate::planet::planet_angels, crate::planet::planet_ascend_info, crate::planet::planet_god_info, crate::planet::planet_zeno_info,
-            crate::planet::planet_card, crate::planet::planet_save, crate::planet::planet_playing, crate::planet::planet_fps
+            crate::planet::planet_card, crate::planet::planet_fps
         ]
     };
 }
@@ -556,7 +564,7 @@ mod tests {
                 call(&w, "kaioken", json!({}));
             }
             if i % 10 == 0 {
-                assert_eq!(call(&w, "frame", json!({})), json!(b.frame_json()), "frame {i} on request");
+                assert_eq!(core.with(|c| c.frame_json()).unwrap(), b.frame_json(), "frame {i} on request");
             }
             if i % 300 == 0 {
                 let menu = b.game.menu_json();
@@ -574,21 +582,36 @@ mod tests {
                     ("god_info", b.game.god_info_json()),
                     ("zeno_info", b.game.zeno_info_json()),
                     ("card", b.game.card_json()),
-                    ("save", b.game.save_json()),
                 ] {
                     assert_eq!(call(&w, cmd, json!({})), json!(want), "{cmd} at {i}");
                 }
+                assert_eq!(core.with(|c| c.game.save_json()).unwrap(), b.game.save_json(), "save at {i}");
             }
         }
         assert!(frames > 100, "{frames} frames sent");
-        assert_eq!(call(&w, "step", json!({ "elapsed": 0.1, "now_ms": t0 })), json!(b.step(0.1, t0)));
-        b.clock(t0);
-        assert_eq!(call(&w, "step_one", json!({ "now_ms": t0 })), json!(b.step_one()));
-        assert_eq!(call(&w, "playing", json!({})), json!(true));
+        assert!(core.with(|c| c.game.playing).unwrap());
         b.resend();
         call(&w, "resend", json!({}));
-        assert_eq!(call(&w, "frame", json!({})), json!(b.frame_json()));
-        assert_eq!(call(&w, "save", json!({})), json!(b.game.save_json()));
+        assert_eq!(core.with(|c| c.frame_json()).unwrap(), b.frame_json());
+        assert_eq!(core.with(|c| c.game.save_json()).unwrap(), b.game.save_json());
+    }
+
+    // the app steps, frames and saves the game: the page can't, nor load a save of its own
+    #[test]
+    fn the_page_cannot_drive_the_game_loop() {
+        let (_app, w) = app(file("gone"));
+        for cmd in ["load", "step", "step_one", "frame", "save", "playing"] {
+            let req = InvokeRequest {
+                cmd: format!("planet_{cmd}"),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: w.url().unwrap(),
+                body: InvokeBody::Json(json!({ "text": "{}", "elapsed": 1e9, "now_ms": 0.0 })),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            };
+            assert!(get_ipc_response(&w, req).is_err(), "planet_{cmd} is still callable");
+        }
     }
 
     // half an hour of the game hidden, caught up once a second, every 5 s and in odd batches, against the same game
@@ -664,25 +687,46 @@ mod tests {
     }
 
     #[test]
+    fn the_save_is_replaced_whole_and_not_after_exit() {
+        let f = file("atomic");
+        let core = Core::new(SEED, f.clone());
+        core.with(|b| b.start("Wed Oct 28 2026", 1.7e12)).unwrap();
+        core.save();
+        assert!(f.exists() && !f.with_extension("json.tmp").exists());
+        core.stop();
+        let last = fs::read_to_string(&f).unwrap();
+        core.tick(5.0, 1.7e12 + 5000.0);
+        core.save();
+        assert_eq!(fs::read_to_string(&f).unwrap(), last, "saved after the exit save");
+        let _ = fs::remove_file(f);
+    }
+
+    #[test]
+    fn only_a_small_regular_file_is_read() {
+        let f = file("big");
+        fs::write(&f, " ".repeat(MAX_SAVE + 1)).unwrap();
+        assert!(read_save(&f).is_none());
+        fs::write(&f, "{}").unwrap();
+        assert_eq!(read_save(&f).as_deref(), Some("{}"));
+        #[cfg(unix)]
+        {
+            let link = file("link");
+            std::os::unix::fs::symlink(&f, &link).unwrap();
+            assert!(read_save(&link).is_none(), "a link is followed");
+            let _ = fs::remove_file(link);
+        }
+        let _ = fs::remove_file(f);
+    }
+
+    #[test]
     fn a_crafted_save_is_never_parsed() {
         let f = file("deep");
         fs::write(&f, "[".repeat(100_000)).unwrap();
         let core = Core::new(SEED, f.clone());
         assert!(!core.with(|b| b.game.playing).unwrap());
-        let (app, w) = app(file("deep-cmd"));
-        let req = |text: String| InvokeRequest {
-            cmd: "planet_load".into(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: w.url().unwrap(),
-            body: InvokeBody::Json(json!({ "text": text })),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.to_string(),
-        };
-        assert!(get_ipc_response(&w, req("{\"a\":".repeat(50_000))).is_err());
-        assert!(get_ipc_response(&w, req(format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40)))).is_ok(), "brackets in a string are text");
+        assert!(!loadable(&"{\"a\":".repeat(50_000)));
+        assert!(loadable(&format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40))), "brackets in a string are text");
         assert!(!loadable(&" ".repeat(MAX_SAVE + 1)));
-        drop(app);
         let _ = fs::remove_file(f);
     }
 }

@@ -10,8 +10,13 @@
 #     APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID               an Apple ID with an app-specific password
 #   TARGET                   universal-apple-darwin (default), aarch64-apple-darwin or x86_64-apple-darwin
 #   JOBS                     cargo jobs (default: all cores)
+#
+#   scripts/release.sh [build|package]   both by default. CI runs them as two steps, so the notary credentials are
+#                                        never in the environment of npm or of the crates' build scripts
 set -euo pipefail
 cd "$(dirname "$0")/.."
+STAGE=${1:-all}
+case "$STAGE" in all | build | package) ;; *) echo "usage: scripts/release.sh [build|package]" >&2; exit 2 ;; esac
 
 TARGET=${TARGET:-universal-apple-darwin}
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -33,20 +38,23 @@ else
   echo "APPLE_SIGNING_IDENTITY unset: ad-hoc signed, not notarized" >&2; NOTARY=()
 fi
 
-case "$TARGET" in
-  universal-apple-darwin) rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null ;;
-  *) rustup target add "$TARGET" >/dev/null ;;
-esac
-[ -d node_modules ] || npm ci --no-audit --no-fund
-# an empty secret still exports the variable in CI, and tauri then tries to import a certificate that isn't there
-for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do [ -n "${!v:-}" ] || unset "$v"; done
-npm run -s page
-# notarizing happens below, with notarytool, for the app and the dmg alike: keep tauri from doing it as well
-env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
-  ${JOBS:+CARGO_BUILD_JOBS=$JOBS} npx tauri build --bundles app --target "$TARGET"
-
 APP="src-tauri/target/$TARGET/release/bundle/macos/$PRODUCT.app"
-codesign --verify --strict --deep "$APP"
+if [ "$STAGE" != package ]; then
+  case "$TARGET" in
+    universal-apple-darwin) rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null ;;
+    *) rustup target add "$TARGET" >/dev/null ;;
+  esac
+  [ -d node_modules ] || npm ci --no-audit --no-fund
+  # an empty secret still exports the variable in CI, and tauri then tries to import a certificate that isn't there
+  for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do [ -n "${!v:-}" ] || unset "$v"; done
+  npm run -s page
+  # notarizing happens below, with notarytool, for the app and the dmg alike: keep tauri from doing it as well
+  env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
+    ${JOBS:+CARGO_BUILD_JOBS=$JOBS} npx tauri build --bundles app --target "$TARGET"
+  codesign --verify --strict --deep "$APP"
+fi
+[ "$STAGE" = build ] && exit 0
+[ -d "$APP" ] || { echo "no $APP: run scripts/release.sh build first" >&2; exit 1; }
 rm -rf "$OUT" && mkdir -p "$OUT"
 
 notarize() {   # notarize <file to submit> <file to staple>
