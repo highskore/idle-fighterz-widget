@@ -1410,7 +1410,7 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot", "planet_buy_n", "planet_undo", "planet_shop_info", "planet_bulk"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
         for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save", "glance", "preview_frame", "tray_action", "hide_popover"] {
@@ -1419,13 +1419,13 @@ mod tests {
         for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings", "focus_status", "snooze", "save_profile", "delete_profile", "apply_profile", "glance", "preview_frame"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask", "tray_action", "hide_popover"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_buy_n", "planet_undo", "planet_fps", "planet_view", "planet_pixels", "planet_mask", "tray_action", "hide_popover"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
         }
         for cmd in ["get_settings", "set_settings", "glance", "tray_action", "hide_popover"] {
             assert!(call(&popover, cmd), "the popover may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "planet_start", "planet_buy", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "planet_start", "planet_buy", "planet_buy_n", "planet_undo", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
             assert!(!call(&popover, cmd), "the popover may not call {cmd}");
         }
     }
