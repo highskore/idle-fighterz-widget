@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, platform: macos }        # universal .dmg and .zip
+          - { os: macos-15, platform: macos }        # universal .dmg and .zip
           - { os: windows-latest, platform: windows } # NSIS -setup.exe and .msi
           - { os: ubuntu-22.04, platform: linux }    # .AppImage and .deb (22.04's glibc, so they run on older distros too)
     runs-on: ${{ matrix.os }}
@@ -443,7 +443,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, platform: macos, package: '*_universal.zip', minisign: macos.zip }
+          - { os: macos-15, platform: macos, package: '*_universal.zip', minisign: macos.zip }
           - { os: ubuntu-22.04, platform: linux, package: '*_amd64.AppImage', minisign: linux.tar.gz }
     runs-on: ${{ matrix.os }}
     steps:
