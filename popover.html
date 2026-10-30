@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>popover</title>
+<link rel="stylesheet" href="fonts.css">
+<style>
+/* the menu-bar popover (tray_style "popover"), opened by a click on the tray icon; right-click keeps the native menu */
+:root { --bg: rgba(244,244,246,.97); --ink: #1d1d1f; --tile: #fff; --dim: #6e6e73; --track: rgba(0,0,0,.1); --hl: #0a64d8; --edge: rgba(0,0,0,.2); color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: rgba(36,36,42,.97); --ink: #f2f2f4; --tile: rgba(255,255,255,.08); --dim: #a1a1a6; --track: rgba(255,255,255,.14); --edge: rgba(255,255,255,.18); color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: transparent; overflow: hidden; }
+body { font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink); -webkit-user-select: none; user-select: none; cursor: default; }
+.tp { height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--bg); border-radius: 14px; box-shadow: inset 0 0 0 .5px var(--edge); }
+.card { background: var(--tile); border-radius: 11px; padding: 10px 11px; }
+.k { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); white-space: nowrap; overflow: hidden; }
+.n { display: flex; align-items: baseline; gap: 8px; margin: 3px 0 2px; font: 30px/1 "Instrument Serif", Georgia, serif; letter-spacing: -.01em; font-variant-numeric: tabular-nums lining-nums; white-space: nowrap; }
+.n small { font: 11px -apple-system, system-ui, sans-serif; color: #2fa35a; }
+.f { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--dim); font-size: 11px; white-space: nowrap; }
+.f b { font-weight: 500; color: inherit; overflow: hidden; text-overflow: ellipsis; }
+.bar { height: 4px; margin-top: 4px; border-radius: 2px; background: var(--track); overflow: hidden; } .bar i { display: block; height: 100%; width: 0; background: #d99a1c; border-radius: 2px; transition: width .4s; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mini b { display: block; margin-top: 3px; font-weight: 500; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.balls { display: flex; gap: 3px; margin-top: 5px; } .balls i { width: 9px; height: 9px; border-radius: 50%; background: var(--track); } .balls i.on { background: radial-gradient(circle at 35% 35%, #ffd27a, #f08a1c); }
+.go { display: inline-block; margin-top: 5px; padding: 2px 8px; border-radius: 999px; background: #d99a1c; color: #fff; font-size: 11px; }
+.dim { color: var(--dim); font-weight: 400 !important; }
+.tg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.tg button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; font: inherit; font-size: 10px; color: var(--dim); background: none; border: 0; cursor: pointer; }
+.tg i { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--tile); color: var(--ink); transition: background .15s; }
+.tg button[aria-pressed="true"] i { background: var(--hl); color: #fff; }
+.tg svg { width: 16px; height: 16px; }
+.seg { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; }
+.seg div { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--track); }
+.seg button { padding: 2px 10px; font: inherit; font-size: 11px; color: var(--ink); background: none; border: 0; border-radius: 5px; cursor: pointer; }
+.seg button.on { background: var(--tile); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+@media (prefers-color-scheme: light) { .seg button.on { background: #fff; } }
+.rows { margin: 0 -4px; }
+.it { display: flex; justify-content: space-between; align-items: center; width: 100%; height: 24px; padding: 0 8px; font: inherit; font-size: 13px; color: var(--ink); text-align: left; background: none; border: 0; border-radius: 5px; cursor: default; }
+.it:hover, .it:focus-visible { background: var(--hl); color: #fff; outline: none; }
+.it:hover kbd, .it:focus-visible kbd { color: #fff; }
+.it kbd { font: inherit; color: var(--dim); }
+.it[hidden] { display: none; }
+.it.ck::before { content: '✓'; margin-right: 6px; }
+hr { height: 1px; margin: 2px 6px; background: var(--track); border: 0; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="tp" id="tp">
+  <div class="card">
+    <div class="k"><span>power level</span><span id="world"></span></div>
+    <div class="n"><span id="pl">0</span><small id="rate"></small></div>
+    <div id="formbox"><div class="f"><b id="form"></b><span id="next"></span></div><div class="bar"><i id="formp"></i></div></div>
+  </div>
+  <div class="two" id="two">
+    <div class="card mini"><div class="k"><span>next goal</span></div><b id="goal"></b><div class="bar"><i id="goalp"></i></div></div>
+    <div class="card mini"><div class="k"><span>dragon balls</span><span id="bn"></span></div><div class="balls" id="balls"></div><span class="go" id="ready" hidden></span><b class="dim" id="wish"></b></div>
+  </div>
+  <div class="tg" id="tg">
+    <button type="button" data-t="sound" aria-pressed="false"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i>sound</button>
+    <button type="button" data-t="pin" aria-pressed="false"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 6 3 3H7l3-3zM12 12v9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></i>pin hud</button>
+    <button type="button" data-t="top" aria-pressed="false"><i><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="9" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="4" width="12" height="11" rx="2" fill="currentColor"/></svg></i>on top</button>
+    <button type="button" data-t="clouds" aria-pressed="false"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1 0 9z" fill="currentColor"/></svg></i>clouds</button>
+  </div>
+  <div class="seg"><span>size</span><div id="size"><button type="button" data-v="300">small</button><button type="button" data-v="400">medium</button><button type="button" data-v="560">large</button></div></div>
+  <div class="rows">
+    <hr>
+    <button type="button" class="it" data-a="show"><span id="showt">Hide Planet</span><kbd id="showk"></kbd></button>
+    <button type="button" class="it" data-a="photo" id="photo" hidden><span>Photo Mode</span><kbd></kbd></button>
+    <button type="button" class="it" data-a="settings"><span>Settings…</span><kbd id="setk"></kbd></button>
+    <button type="button" class="it" data-a="login" id="login"><span>Launch at Login</span><kbd></kbd></button>
+    <button type="button" class="it" data-a="check_update" id="upd"><span id="updt">Check for Updates…</span><kbd></kbd></button>
+    <hr>
+    <button type="button" class="it" data-a="quit"><span id="quitt">Quit</span><kbd id="quitk"></kbd></button>
+  </div>
+</div>
+<script>
+const { invoke } = window.__TAURI__.core, $ = id => document.getElementById(id);
+const set = settings => invoke('set_settings', { settings });
+let s = {}, MAC = true, on = true, timer = 0;
+
+const SHORT = ['', 'K', 'M', 'B', 'T'];
+const short = n => { n = Math.floor(n); if (n < 1000) return String(n); let e = Math.floor(Math.log10(n) / 3), m = n / 10 ** (e * 3); if (+m.toFixed(1) >= 1000) { e++; m /= 1000; } return e < SHORT.length ? m.toFixed(1) + SHORT[e] : n.toExponential(1).replace('+', ''); };
+const num = n => n < 1e12 ? Math.floor(n).toLocaleString('en-US') : short(n);
+const keyText = sc => sc ? sc.split('+').map(p => (MAC ? { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Cmd: '⌘' }[p] : p === 'Cmd' ? 'Super' : p) || p).map(p => p.replace(/^(Key|Digit)/, '')).join(MAC ? '' : '+') : '';
+
+function render(v) {
+  s = v; MAC = s.os === 'macos';
+  const t = { sound: s.sound === true, pin: s.hud === 'always', top: !!s.on_top, clouds: s.clouds !== 'never' };
+  for (const b of $('tg').children) b.setAttribute('aria-pressed', String(t[b.dataset.t]));
+  for (const b of $('size').children) b.classList.toggle('on', +b.dataset.v === s.size);
+  $('showk').textContent = keyText(s.shortcut);
+  $('setk').textContent = MAC ? '⌘,' : 'Ctrl+,';
+  $('quitk').textContent = MAC ? '⌘Q' : 'Ctrl+Q';
+  $('quitt').textContent = 'Quit ' + s.name;
+  $('photo').hidden = !s.photo;
+  $('login').classList.toggle('ck', !!s.login);
+}
+
+// the game at a glance, twice a second while open (nothing while closed)
+function glance() {
+  invoke('glance').then(g => {
+    $('showt').textContent = g.shown ? 'Hide Planet' : 'Show Planet';
+    $('updt').textContent = g.update || 'Check for Updates…';
+    $('upd').dataset.a = g.update ? 'update' : 'check_update';
+    const h = g.game && g.game.hud;
+    $('two').hidden = $('formbox').hidden = !h;
+    if (!h) { $('pl').textContent = g.power || '0'; $('rate').textContent = ''; $('world').textContent = ''; return; }
+    $('pl').textContent = num(h.pl); $('rate').textContent = '+' + short(h.rate) + '/s';
+    $('world').textContent = g.game.world ? 'planet · ' + g.game.world : '';
+    const f = h.form;
+    $('form').textContent = f.name === 'base' ? 'base form' : `${f.name} ×${f.x}`;
+    $('next').textContent = f.next ? `→ ${f.next} · ${Math.floor(f.p * 100)}%` : 'top form';
+    $('formp').style.width = (f.next ? f.p * 100 : 100).toFixed(1) + '%';
+    $('goal').textContent = h.goal.text || 'none right now'; $('goalp').style.width = (h.goal.p * 100).toFixed(1) + '%';
+    $('bn').textContent = h.balls + '/7';
+    $('balls').innerHTML = '<i class="on"></i>'.repeat(h.balls) + '<i></i>'.repeat(Math.max(0, 7 - h.balls));
+    $('ready').hidden = !g.game.ready; $('ready').textContent = g.game.ready + (g.game.ready === 1 ? ' upgrade ready' : ' upgrades ready');
+    $('wish').hidden = !!g.game.ready; $('wish').textContent = h.wishes ? `★${h.wishes} wish${h.wishes === 1 ? '' : 'es'}` : 'no wish yet';
+  }).catch(() => {});
+}
+const start = () => { clearInterval(timer); glance(); timer = setInterval(glance, 500); };
+const stop = () => { clearInterval(timer); timer = 0; };
+window.__TAURI__.event.listen('popover', e => { on = !!e.payload; if (on) { start(); invoke('get_settings').then(render); } else stop(); });
+
+$('tg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const k = b.dataset.t;
+  if (k === 'sound') set({ sound: s.sound !== true });
+  if (k === 'pin') set({ hud: s.hud === 'always' ? 'hover' : 'always' });
+  if (k === 'top') set({ on_top: !s.on_top });
+  if (k === 'clouds') set({ clouds: s.clouds === 'never' ? 'hover' : 'never' });
+});
+$('size').addEventListener('click', e => { const b = e.target.closest('button'); if (b) set({ size: +b.dataset.v }); });
+document.querySelector('.rows').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) invoke('tray_action', { id: b.dataset.a }); });
+addEventListener('keydown', e => {
+  const cmd = MAC ? e.metaKey : e.ctrlKey;
+  if (e.key === 'Escape') invoke('hide_popover');
+  else if (cmd && e.key === ',') { e.preventDefault(); invoke('tray_action', { id: 'settings' }); }
+  else if (cmd && e.key.toLowerCase() === 'q') { e.preventDefault(); invoke('tray_action', { id: 'quit' }); }
+  else if (cmd && e.key.toLowerCase() === 'w') { e.preventDefault(); invoke('hide_popover'); }
+});
+invoke('get_settings').then(render);
+window.__TAURI__.event.listen('settings', e => render(e.payload));
+start();
+</script>
+</body>
+</html>
