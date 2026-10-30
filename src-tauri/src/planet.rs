@@ -50,6 +50,8 @@ pub struct Core {
     surface: OnceLock<Box<dyn Surface>>,
     /// the screensavers mirroring the run (saver/README.md)
     saver: OnceLock<saver_link::Hub>,
+    /// photo mode: the shown game holds still, and plays the time on resume
+    paused: Mutex<bool>,
 }
 
 /// What a hidden catch-up leaves for the app: the power level, and the notifications the page would have sent.
@@ -119,6 +121,10 @@ impl Painter {
         self.fb.rgba()
     }
 
+    pub fn scale(&self) -> f64 {
+        self.view.scale
+    }
+
     /// One bit a pixel, set where anything is drawn (alpha > 0), rows top to bottom: widget.js's empty-sky test.
     pub fn mask(&self) -> Vec<u8> {
         let mut m = vec![0u8; self.fb.buf.len().div_ceil(8)];
@@ -176,7 +182,7 @@ impl Core {
         if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
-        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new(), saver: OnceLock::new() }
+        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new(), saver: OnceLock::new(), paused: Mutex::new(false) }
     }
 
     /// Frames go to the screensavers `hub` serves while any is watching.
@@ -308,6 +314,52 @@ impl Core {
         });
     }
 
+    /// Photo mode: while paused the shown game isn't stepped or drawn; on resume it plays the time it missed.
+    pub fn pause(&self, on: bool) {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = on;
+    }
+
+    fn paused(&self) -> bool {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Steps all but the last of a long `elapsed` (a pause's) undrawn, so `tick` draws the rest: no time is lost, and
+    /// what happened meanwhile reaches the page with the next frame, but its toasts go as a hidden catch-up's do (so the
+    /// one saying where the photo went is seen). What's left for `tick`.
+    fn fast_forward(&self, mut elapsed: f64, now_ms: f64) -> f64 {
+        if elapsed <= 0.5 {
+            return elapsed;
+        }
+        let _ = self.with(|b| {
+            while elapsed > 2.0 * DT {
+                let piece = (elapsed - 1.5 * DT).min(PIECE);
+                b.step(piece, now_ms);
+                elapsed -= piece;
+            }
+            b.game.events.clear();
+        });
+        elapsed
+    }
+
+    /// The last frame drawn, its size, and the scale it's shown at (pixels per point). None before the first.
+    pub fn frame(&self) -> Option<(Vec<u8>, u32, u32, f64)> {
+        let p = self.paint();
+        let (w, h) = p.painter.size();
+        (p.on && w > 1).then(|| (p.painter.rgba().to_vec(), w, h, p.painter.scale()))
+    }
+
+    /// The game as the away recap sees it.
+    pub fn snap(&self) -> Option<crate::recap::Snap> {
+        self.with(|b| crate::recap::Snap {
+            pl: b.game.hud.pl,
+            saga: b.game.s.saga,
+            form: b.game.hud.form_name.to_string(),
+            dragon: b.game.hud.shen,
+            ascend: can_ascend(&b.game),
+        })
+        .ok()
+    }
+
     pub fn can_ascend(&self) -> bool {
         self.with(|b| can_ascend(&b.game)).unwrap_or(false)
     }
@@ -424,6 +476,11 @@ fn now_ms() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
 }
 
+/// the saga villain the `i`th raid brings (they come round again after the last)
+pub fn villain(i: u32) -> &'static str {
+    planet_core::data::VILLAINS[i as usize % planet_core::data::VILLAINS.len()].0
+}
+
 pub fn seed() -> u32 {
     let n = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos() ^ d.as_secs() as u32).unwrap_or(1);
     n.max(1)
@@ -456,6 +513,10 @@ pub fn run(app: AppHandle, hooks: Hooks) {
             if core.stopped() {
                 return;
             }
+            if shown.get() && core.paused() {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             if shown.get() {
                 let fps = Some(*core.fps.lock().unwrap()).filter(|f| *f > 0.0).unwrap_or_else(|| (hooks.idle_fps)(&app));
                 // the game steps 30 times a second: a faster tick would find nothing new every other time. Drawn, the
@@ -469,7 +530,7 @@ pub fn run(app: AppHandle, hooks: Hooks) {
                     None => std::thread::sleep(wait),
                 }
                 let now = Instant::now();
-                let elapsed = (now - last).as_secs_f64();
+                let elapsed = core.fast_forward((now - last).as_secs_f64(), now_ms());
                 last = now;
                 if let Some(msg) = core.tick(elapsed, now_ms()) {
                     let _ = app.emit_to("main", "planet", msg);

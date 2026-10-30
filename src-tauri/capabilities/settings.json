@@ -13,6 +13,11 @@
     "allow-notify-permission",
     "allow-request-notify-permission",
     "allow-open-notify-settings",
+    "allow-focus-status",
+    "allow-snooze",
+    "allow-save-profile",
+    "allow-delete-profile",
+    "allow-apply-profile",
     "allow-quit"
   ]
 }

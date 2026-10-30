@@ -37,6 +37,8 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 .times[aria-disabled="true"] { opacity: .4; pointer-events: none; }
 .pill { font: inherit; text-transform: lowercase; padding: 3px 10px; color: var(--ink); background: #efefec; border: 0; border-radius: 999px; cursor: pointer; }
 .pill:hover { background: #e4e4e0; }
+.pill:disabled { opacity: .4; cursor: default; }
+#snz button { padding: 3px 7px; }
 .key { min-width: 64px; font: inherit; padding: 3px 10px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
 .key.rec { color: var(--gold); border-color: var(--gold); }
 .keys { display: flex; align-items: center; gap: 4px; }
@@ -44,6 +46,16 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 .row small.err { color: #c0392b; }
 .row[hidden] { display: none; }
 .note { margin: 0; padding: 6px 0 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.find { position: sticky; top: 0; z-index: 1; margin: 0 -20px; padding: 10px 20px 8px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.find input { width: 100%; font: inherit; padding: 5px 10px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 999px; outline: none; -webkit-user-select: text; user-select: text; }
+.find input:focus { border-color: var(--gold); }
+.find small { display: block; padding-top: 6px; color: var(--muted); }
+.find small[hidden] { display: none; }
+main::-webkit-scrollbar { width: 6px; }
+main::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 3px; }
+.miss { display: none !important; }
+.name { width: 150px; font: inherit; padding: 2px 8px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 6px; -webkit-user-select: text; user-select: text; }
+.size { display: flex; align-items: center; gap: 6px; }
 .quit { display: block; width: 100%; margin-top: 20px; padding: 9px; font: inherit; text-transform: lowercase; color: #fff; background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
 </style>
 </head>
@@ -51,42 +63,54 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <div class="win">
 <div class="bar" data-tauri-drag-region><span data-tauri-drag-region>settings</span><button type="button" class="x" id="close" aria-label="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>
 <main>
+<div class="find"><input type="search" id="q" placeholder="search settings" aria-label="search settings" autocomplete="off" spellcheck="false"><small id="none" hidden>nothing matches</small></div>
 
 <h2>widget</h2>
-<label class="row"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
-<div class="row"><span>size</span><div class="seg" data-seg="size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button></div></div>
-<div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
-<div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
-<div class="row"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
-<label class="row"><span>battery saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
-<div class="row"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
-<label class="row"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
-<label class="row" id="hiderow"><span>hide for fullscreen apps <small>and slideshows</small></span><input type="checkbox" data-k="auto_hide"></label>
-<div class="row"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
-<label class="row"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
-<label class="row"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
-<label class="row"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
-<div class="row"><span>show / hide <small id="keyerr"></small></span><div class="keys"><small id="nokeys" hidden>not on wayland</small><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
-<p class="note" id="wlnote" hidden>wayland lets no app grab a key for itself. to show the widget from the keyboard, add a shortcut in your desktop's settings that runs <b id="wlcmd">idle-fighterz</b>: opening it again brings the widget back.</p>
-<label class="row"><span>show power in <b id="bar">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
-<div class="row" id="trayrow" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
-<label class="row"><span>launch at login</span><input type="checkbox" data-k="login"></label>
-<label class="row"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
+<label class="row" data-s="on_top"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
+<label class="row" data-s="size"><span>size <small id="szv"></small></span><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-describedby="szv"></label>
+<datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
+<div class="row" data-s="layout"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
+<div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
+<div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
+<label class="row" data-s="battery_auto"><span>battery saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
+<div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+<label class="row" data-s="ghost"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
+<label class="row" id="hiderow" data-s="auto_hide"><span>hide for fullscreen apps <small>and slideshows</small></span><input type="checkbox" data-k="auto_hide"></label>
+<div class="row" data-s="clouds"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
+<label class="row" data-s="cloud_shape"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
+<label class="row" data-s="cloud_amount"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
+<label class="row" data-s="opacity"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
+<div class="row" data-s="shortcut"><span>show / hide <small id="keyerr"></small></span><div class="keys"><small id="nokeys" hidden>not on wayland</small><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
+<p class="note" id="wlnote" data-s="shortcut" hidden>wayland lets no app grab a key for itself. to show the widget from the keyboard, add a shortcut in your desktop's settings that runs <b id="wlcmd">idle-fighterz</b>: opening it again brings the widget back.</p>
+<label class="row" data-s="menubar_power"><span>show power in <b id="bar">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
+<div class="row" id="trayrow" data-s="tray_icon" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
+<label class="row" data-s="sound"><span>game sound</span><input type="checkbox" data-k="sound"></label>
+<label class="row" data-s="recap"><span>away recap <small>a toast when you're back</small></span><input type="checkbox" data-k="recap"></label>
+<label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
+<label class="row" data-s="update_check"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
+
+<h2>profiles</h2>
+<div id="profiles"></div>
+<div class="row" data-s="profile"><input type="text" class="name" id="pname" placeholder="name, e.g. work" maxlength="24" aria-label="profile name" autocomplete="off" spellcheck="false"><button type="button" class="pill" id="psave">save current</button></div>
+<p class="note" id="pnote" data-s="profile">a profile keeps how the widget looks and behaves; switch from the tray too.</p>
 
 <h2>notifications</h2>
-<div class="row"><span><b id="os">macos</b> <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
-<label class="row"><span>villain raids</span><input type="checkbox" data-n="raid"></label>
-<label class="row"><span>the dragon is summoned</span><input type="checkbox" data-n="shenron"></label>
-<label class="row"><span>trips to other worlds</span><input type="checkbox" data-n="trip"></label>
-<label class="row"><span>space pods</span><input type="checkbox" data-n="pod"></label>
-<label class="row"><span>ascend is available</span><input type="checkbox" data-n="ascend"></label>
-<label class="row"><span>quiet hours</span><input type="checkbox" id="quiet"></label>
-<div class="row"><span>quiet between</span><div class="times" id="times"><input type="time" id="from"><span>–</span><input type="time" id="to"></div></div>
+<div class="row" data-s="permission"><span><b id="os">macos</b> <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
+<label class="row" data-s="notify"><span>villain raids</span><input type="checkbox" data-n="raid"></label>
+<label class="row" data-s="notify"><span>the dragon is summoned</span><input type="checkbox" data-n="shenron"></label>
+<label class="row" data-s="notify"><span>trips to other worlds</span><input type="checkbox" data-n="trip"></label>
+<label class="row" data-s="notify"><span>space pods</span><input type="checkbox" data-n="pod"></label>
+<label class="row" data-s="notify"><span>ascend is available</span><input type="checkbox" data-n="ascend"></label>
+<label class="row" data-s="follow_focus"><span>quiet in focus <small id="focusv"></small></span><input type="checkbox" data-k="follow_focus"></label>
+<div class="row" data-s="snooze"><span>snooze <small id="snoozev"></small></span><div class="seg" id="snz"><button data-v="30">30m</button><button data-v="60">1h</button><button data-v="180">3h</button><button data-v="tomorrow">tomorrow</button><button data-v="off" id="resume">resume</button></div></div>
+<label class="row" data-s="quiet"><span>quiet hours</span><input type="checkbox" id="quiet"></label>
+<div class="row" data-s="quiet"><span>quiet between</span><div class="times" id="times"><input type="time" id="from"><span>–</span><input type="time" id="to"></div></div>
 
 <button type="button" class="quit" id="quit">quit</button>
 </main>
 </div>
 
+<script src="settings-search.js"></script>
 <script>
 const { invoke } = window.__TAURI__.core, $ = id => document.getElementById(id);
 const set = settings => invoke('set_settings', { settings });
@@ -116,7 +140,74 @@ function render(v) {
   // wayland has no global shortcut (main.rs): the key picker gives way to a hint
   $('nokeys').hidden = $('wlnote').hidden = !s.wayland; $('key').hidden = !!s.wayland; $('wlcmd').textContent = s.name.toLowerCase().replace(/ /g, '-');
   $('quit').textContent = 'quit ' + s.name.toLowerCase();
+  // the slider: the old sizes are snap points on it; the pixel art is drawn 1× below 520 and 2× from there
+  if (!sliding()) $('size').value = s.size;
+  showSize(s.size);
+  profiles();
+  $('snoozev').textContent = s.snooze_left ? s.snooze_left + ' left' : '';
+  $('resume').disabled = !s.snooze_left;
+  filter();
 }
+const SNAPS = { 300: 'small', 400: 'medium', 560: 'large' };
+const showSize = v => { $('szv').textContent = v + (SNAPS[v] ? ' · ' + SNAPS[v] : '') + ' · ' + (v >= 520 ? '2×' : '1×'); $('szv').title = 'points across; the pixel art is drawn ' + (v >= 520 ? '2×' : '1×') + ' (2× from 520)'; };
+// while it's being moved (by pointer or keys) the thumb stays where it's put, so steps can leave a snap point; the
+// window and the label show the snapped size, and the thumb joins them once it's let be
+let slidAt = -1e9, settle = 0;
+const sliding = () => document.activeElement === $('size') || performance.now() - slidAt < 1200;
+const settleSize = () => { if (!sliding()) $('size').value = s.size; else { clearTimeout(settle); settle = setTimeout(settleSize, 300); } };
+$('size').addEventListener('input', () => { slidAt = performance.now(); set({ size: +$('size').value }); settleSize(); });
+$('size').addEventListener('blur', settleSize);
+
+// profiles: saved from the settings as they are, switched here or from the tray
+const esc = t => String(t).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+let listed = '';
+function profiles() {
+  const list = s.profiles || [], key = JSON.stringify([list.map(p => p.name), s.profile]);
+  if (key === listed) return; listed = key;
+  $('profiles').innerHTML = list.map((p, k) => `<div class="row" data-s="profile"><span>${esc(p.name.toLowerCase())} <small>${p.name === s.profile ? 'on now' : ''}</small></span><div class="keys"><button type="button" class="pill" data-use="${k}"${p.name === s.profile ? ' disabled' : ''}>use</button><button type="button" class="pill" data-del="${k}" aria-label="delete ${esc(p.name)}">×</button></div></div>`).join('');
+}
+$('profiles').addEventListener('click', e => {
+  const b = e.target.closest('button'), list = s.profiles || []; if (!b) return;
+  if (b.dataset.use) invoke('apply_profile', { name: list[+b.dataset.use].name });
+  if (b.dataset.del) invoke('delete_profile', { name: list[+b.dataset.del].name });
+});
+const pnote = $('pnote').textContent;
+const saveProfile = () => invoke('save_profile', { name: $('pname').value })
+  .then(() => { $('pname').value = ''; $('pnote').textContent = pnote; })
+  .catch(e => { $('pnote').textContent = String(e); });
+$('psave').addEventListener('click', saveProfile);
+$('pname').addEventListener('keydown', e => { if (e.key === 'Enter') saveProfile(); });
+
+// snooze, as in the tray; and whether the system is in focus / do not disturb now (where it can tell)
+$('snz').addEventListener('click', e => { const b = e.target.closest('button'); if (b) invoke('snooze', { choice: b.dataset.v }); });
+const FOCUS = { true: 'on now', false: 'off now', null: "can't tell here" };
+const checkFocus = () => invoke('focus_status').then(f => { $('focusv').textContent = FOCUS[f]; });
+
+// search: rows whose words, section or synonyms start with what's typed. Esc clears it (then closes the window)
+const sections = [...document.querySelectorAll('main h2')].map(h => ({ h, name: h.textContent }));
+function filter() {
+  const q = $('q').value; let any = false;
+  for (const { h, name } of sections) {
+    let shown = 0;
+    for (let e = h.nextElementSibling; e && e.tagName !== 'H2' && !e.classList.contains('quit'); e = e.nextElementSibling) {
+      const rows = e.id === 'profiles' ? [...e.children] : e.matches('.row, .note') ? [e] : [];
+      for (const r of rows) { const ok = SettingsSearch.matches(q, r.textContent, r.dataset.s, name); r.classList.toggle('miss', !ok); if (ok && !r.hidden) shown++; }
+    }
+    h.classList.toggle('miss', !shown); any = any || shown > 0;
+  }
+  $('none').hidden = any; $('quit').classList.toggle('miss', !!q.trim() && !SettingsSearch.matches(q, $('quit').textContent, 'quit', ''));
+}
+$('q').addEventListener('input', filter);
+$('q').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('q').value) { e.stopPropagation(); $('q').value = ''; filter(); }
+  // down or enter: into the first setting shown
+  if (e.key === 'ArrowDown' || e.key === 'Enter') { const first = [...document.querySelectorAll('main .row:not(.miss) :is(input, button, select)')].find(c => !c.closest('[hidden]') && !c.disabled && c.offsetParent); if (first) { e.preventDefault(); first.focus(); } }
+});
+addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'f') { e.preventDefault(); $('q').focus(); $('q').select(); } });
+// opened (or shown again): the search has the keyboard
+const toSearch = () => { if (!document.activeElement || document.activeElement === document.body) $('q').focus(); };
+addEventListener('focus', () => { toSearch(); checkFocus(); });
+$('q').focus(); checkFocus();
 document.querySelectorAll('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
 document.querySelectorAll('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
 document.querySelectorAll('[data-n]').forEach(i => i.addEventListener('change', () => { set({ notify: { [i.dataset.n]: i.checked } }); if (i.checked && perm === 'ask') invoke('request_notify_permission'); }));

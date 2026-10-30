@@ -86,8 +86,35 @@ GAMES.push({
       queue = queue.then(() => (stale ? refresh() : null)).then(() => deliver(m)).catch(e => console.error(e));
     });
     ui.onBuy(key => call('buy', { key }));
-    // the app's own news (an update is out, or the answer to a check), as the game's toasts
+    // the app's own news (an update is out, a photo saved, the away recap), as the game's toasts
     tauri.event.listen('notice', ({ payload }) => ui.event(payload, 8000));
+
+    // photo mode (the tray, or P): the app pauses the game and the HUD steps aside for the frame; any key or click
+    // carries on, and goes no further
+    const root = document.documentElement, photoCss = document.createElement('style');
+    photoCss.textContent = 'html.photo #game > :not(.stage), html.photo .menu { visibility: hidden !important; transition: none !important; }';
+    document.head.append(photoCss);
+    tauri.event.listen('photo', ({ payload }) => root.classList.toggle('photo', !!payload));
+    let swallow = false;
+    const leave = e => {
+      if (e.type === 'click' && swallow) { swallow = false; e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (!root.classList.contains('photo') || e.type === 'click') return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.type === 'pointerdown') swallow = true;
+      root.classList.remove('photo'); tauri.core.invoke('photo_exit');
+    };
+    for (const t of ['pointerdown', 'keydown', 'click']) addEventListener(t, leave, true);
+
+    // the game's sound lives in the page; the app keeps it with the settings so a profile can carry it
+    const snd = document.getElementById('snd'), soundOn = () => snd.getAttribute('aria-pressed') === 'true';
+    const tellSound = () => tauri.core.invoke('set_sound', { on: soundOn() }).catch(() => {});
+    const applySound = st => {
+      if (typeof st.sound !== 'boolean' || st.sound === soundOn()) return;
+      snd.click(); document.querySelector('[data-w="snd"]')?.setAttribute('aria-pressed', String(soundOn()));
+    };
+    for (const b of [snd, document.getElementById('sndM')]) b?.addEventListener('click', () => setTimeout(tellSound));
+    tauri.core.invoke('get_settings').then(st => (typeof st.sound === 'boolean' ? applySound(st) : tellSound()));
+    tauri.event.listen('settings', ({ payload }) => applySound(payload));
 
     st.cv.addEventListener('pointerdown', e => call('pointer_down', { ...ptr(e), button: e.button, touch: e.pointerType === 'touch' }));
     st.cv.addEventListener('pointermove', e => call('pointer_move', ptr(e)));
@@ -97,6 +124,7 @@ GAMES.push({
     addEventListener('keydown', e => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, [contenteditable]')) return;
       const k = e.key.toLowerCase();
+      if (k === 'p') { tauri.core.invoke('photo'); return; }   // photo mode: no game key is P
       if (k === ' ') { e.target.blur?.(); e.preventDefault(); }   // the answer comes back too late to decide
       call('key', { k });
     });
