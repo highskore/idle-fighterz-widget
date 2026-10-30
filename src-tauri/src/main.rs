@@ -39,7 +39,7 @@ const DEFAULTS: &str = r#"{
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true,
-  "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [],
+  "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
   "shortcut": "Alt+Cmd+KeyP"
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -135,6 +135,7 @@ fn initial_settings(saved: Option<&Value>) -> Value {
     if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
         settings["layout"] = json!(7); // layouts 4 and 5 were dropped
     }
+    prefs::known_look(&mut settings);
     settings
 }
 
@@ -1161,6 +1162,11 @@ mod tests {
         assert_eq!(s["size"], json!(400));
         assert_eq!((s["follow_focus"].clone(), s["recap"].clone(), s["snooze_until"].clone()), (json!(true), json!(true), json!(0)));
         assert_eq!((s["sound"].clone(), s["profiles"].clone()), (json!(null), json!([])));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "today's look");
+        let s = super::initial_settings(Some(&json!({ "skin": "drawer", "theme": "auto" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("auto")));
+        let s = super::initial_settings(Some(&json!({ "skin": "manga", "theme": "sepia" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "one this version doesn't know");
         let profiles = json!([{ "name": "Work", "settings": { "size": 300, "ghost": true } }]);
         let s = super::initial_settings(Some(&json!({ "size": 452, "sound": true, "profiles": profiles })));
         assert_eq!((s["size"].clone(), s["sound"].clone(), s["profiles"].clone()), (json!(452), json!(true), profiles));

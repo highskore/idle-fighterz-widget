@@ -4,10 +4,11 @@
 // page fetches it and puts it on its canvas. The save lives in a file. Hidden, the page gets nothing: the game catches
 // up once a second undrawn and the app shows its power level and notifications itself. See NATIVE.md.
 use planet_core::{
+    big::Big,
     bridge::Bridge,
     data::{Hero, ALL_FORMS},
     hud::Cue,
-    num::{js_string, to_exponential, to_fixed},
+    num::{js_string, sci, to_exponential, to_fixed},
     sprite, Game, DT,
 };
 use planet_render::{
@@ -56,7 +57,7 @@ pub struct Core {
 
 /// What a hidden catch-up leaves for the app: the power level, and the notifications the page would have sent.
 pub struct Caught {
-    pub pl: f64,
+    pub pl: Big,
     pub notes: Vec<(&'static str, String)>,
 }
 
@@ -452,9 +453,15 @@ fn can_ascend(g: &Game) -> bool {
     g.shop().iter().any(|r| r.key == "ascend" && r.can)
 }
 
-/// widget.js `short`: the power level beside the menu-bar icon, e.g. 1.2K, 3.4M, 5.6B, then 7.8e12.
-pub fn short(n: f64) -> String {
+/// widget.js `short`: the power level beside the menu-bar icon, e.g. 1.2K, 3.4M, 5.6B, then 7.8e12; past 1e300,
+/// page.html's `sci` (4.5e1,204)
+pub fn short(n: impl Into<Big>) -> String {
     const SUF: [&str; 4] = ["", "K", "M", "B"];
+    let n = n.into();
+    let Some(n) = n.as_plain() else {
+        let (m, x) = sci(n, 1);
+        return m + &x;
+    };
     let n = n.floor();
     if n < 1000.0 {
         return js_string(n);
@@ -1132,7 +1139,8 @@ mod tests {
         const WIN_FREE: (u32, u32) = (640, 420);
         // (hook, canvas, frames, clouds: None for window mode, Some("") for none, Some("c2") for shape c amount 2)
         type Case<'a> = (&'a str, (u32, u32), u32, Option<&'a str>);
-        let cases: [Case; 28] = [
+        // no #shenron: the summon is a storm on the Rust engine since game PR #35, and game.js (frozen) keeps the old one
+        let cases: [Case; 27] = [
             ("", MEDIUM, 200, Some("")),
             ("", MEDIUM, 200, Some("c2")),
             ("", SMALL, 200, Some("c2")),
@@ -1146,7 +1154,6 @@ mod tests {
             ("#snake", MEDIUM, 400, Some("")),
             ("#snake", MEDIUM, 1810, Some("c2")),
             ("#top", MEDIUM, 60, Some("c3")),
-            ("#shenron", MEDIUM, 200, Some("")),
             ("#ozaru", LARGE, 300, Some("")),
             ("#hero-goku#form5", SMALL, 120, Some("c2")),
             ("#itx", MEDIUM, 60, Some("c2")),
@@ -1235,6 +1242,8 @@ mod tests {
         for (n, want) in [(0.0, "0"), (999.9, "999"), (1000.0, "1.0K"), (1234.0, "1.2K"), (999_949.0, "999.9K"), (999_950.0, "1.0M"), (3.45e6, "3.5M"), (5.6e9, "5.6B"), (7.85e12, "7.9e12"), (1e15, "1.0e15")] {
             assert_eq!(short(n), want, "{n}");
         }
+        assert_eq!(short(Big::new(4.5, 1204)), "4.5e1,204", "past 1e300, as page.html's sci");
+        assert_eq!(short(Big::new(7.12, 1_234_567)), "7.1e1.2M");
     }
 
     #[test]

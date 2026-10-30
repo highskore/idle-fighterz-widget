@@ -155,6 +155,8 @@ GAMES.push({
     forCard();
 
     const resize = () => { call('resize', { w: st.W, h: st.H, scale: st.scale }); st.buf.fill(0); show(); };
+    // the side drawer slides the planet aside (a transition on the stage): the layer follows it frame by frame
+    const relayout = () => { const until = performance.now() + 450, step = () => { show(); if (performance.now() < until) requestAnimationFrame(step); }; step(); };
     resize();
     call('resend');
     return {
@@ -173,6 +175,7 @@ GAMES.push({
       train: () => call('train'),
       start: () => call('start', { today: new Date().toDateString(), now_ms: Date.now() }),
       resize,
+      relayout,
     };
   },
 });
