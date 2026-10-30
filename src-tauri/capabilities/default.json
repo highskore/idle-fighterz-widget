@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "the widget: drags its own window, hears settings and pointer (and, on the Rust core, planet) events, and calls only the commands it uses",
+  "description": "the widget: drags its own window, hears settings and pointer (and, on the Rust core, planet) events, and calls only the commands it uses (photo mode, and the game sound it keeps with the settings, among them)",
   "windows": ["main"],
   "permissions": [
     "core:window:allow-start-dragging",
@@ -13,6 +13,9 @@
     "allow-open-settings",
     "allow-notify",
     "allow-page-state",
+    "allow-set-sound",
+    "allow-photo",
+    "allow-photo-exit",
     "allow-planet-start",
     "allow-planet-resend",
     "allow-planet-resize",

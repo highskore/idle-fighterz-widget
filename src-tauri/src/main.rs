@@ -15,25 +15,31 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+mod focus;
+mod place;
+mod prefs;
 mod system;
 #[cfg(target_os = "macos")]
 mod notes;
 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
 mod native;
 #[cfg(feature = "rust-core")]
+mod photo;
+#[cfg(feature = "rust-core")]
 #[macro_use]
 mod planet;
+#[cfg(feature = "rust-core")]
+mod recap;
 mod screensaver;
 mod update;
 
-// window sides in points, square: the planet sits in the middle with room for its visitors
-const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
+  "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true,
+  "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [],
   "shortcut": "Alt+Cmd+KeyP"
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -47,6 +53,9 @@ struct Tray {
     top: CheckMenuItem<Wry>,
     ghost: CheckMenuItem<Wry>,
     sizes: Vec<CheckMenuItem<Wry>>,
+    profiles: Submenu<Wry>,
+    snooze: Submenu<Wry>,
+    resume: MenuItem<Wry>,
     login: CheckMenuItem<Wry>,
     menu: Menu<Wry>,
     update: MenuItem<Wry>, // "Update to X.Y.Z", in the menu only while there is one
@@ -65,6 +74,7 @@ struct State {
     tray_nudge: Mutex<Option<Sender<()>>>, // wakes the tray icon's watcher (Windows, Linux) when settings change
     #[cfg(feature = "rust-core")]
     sent: Mutex<std::collections::HashMap<&'static str, std::time::Instant>>, // the hidden game's last notification of each kind
+    tray_profiles: Mutex<Option<Vec<String>>>, // the profile names the tray lists now
 }
 
 // whether the widget is on screen. threads that only work for a shown widget wait on this instead of polling the
@@ -120,7 +130,7 @@ fn initial_settings(saved: Option<&Value>) -> Value {
         settings["auto_hide"] = json!(false);
     }
     if let Some(saved) = saved {
-        merge(&mut settings, saved);
+        merge(&mut settings, &prefs::migrate(saved));
     }
     if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
         settings["layout"] = json!(7); // layouts 4 and 5 were dropped
@@ -133,6 +143,7 @@ fn merge(base: &mut Value, over: &Value) {
     for (k, v) in o {
         match b.get_mut(k) {
             Some(bv) if bv.is_object() => merge(bv, v),
+            Some(bv) if bv.is_null() => *bv = v.clone(), // a default of null takes any value (sound: the page's own until set)
             Some(bv) if std::mem::discriminant(bv) == std::mem::discriminant(v) => *bv = v.clone(),
             _ => {}
         }
@@ -157,7 +168,27 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["fps_pick"] = s["fps"].take();
     s["fps"] = json!(rate as u64);
     s["battery_saving"] = json!(rate != pick);
+    s["size"] = json!(prefs::size(&s["size"]) as u64);
+    s["profile"] = json!(prefs::active(&s));
+    let left = (s["snooze_until"].as_f64().unwrap_or(0.0) - now_ms()) / 1000.0;
+    s["snooze_left"] = json!(if left > 0.0 { focus::left(left as i64) } else { String::new() });
+    s["photo"] = json!(photo_ready(app));
     s
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
+}
+
+// photo mode needs the game on the Rust core
+fn photo_ready(app: &AppHandle) -> bool {
+    #[cfg(feature = "rust-core")]
+    return app.try_state::<planet::Core>().is_some();
+    #[cfg(not(feature = "rust-core"))]
+    {
+        let _ = app;
+        false
+    }
 }
 
 // the pages hear the settings again, for a change that isn't theirs (the battery saver)
@@ -182,6 +213,10 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
             bind(&app, &old, new)?;
         }
     }
+    let mut settings = settings;
+    if settings.get("size").is_some() {
+        settings["size"] = json!(prefs::size(&settings["size"]) as u64);
+    }
     let state = app.state::<State>();
     let s = {
         let mut cur = state.settings.lock().unwrap();
@@ -195,6 +230,11 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         let _ = if on { auto.enable() } else { auto.disable() };
     }
     apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
+    if settings.get("snooze_until").is_some() {
+        if let Some(nudge) = app.try_state::<SnoozeNudge>() {
+            nudge.0.notify_all();
+        }
+    }
     app.state::<Shown>().poke();
     // only a new pick: on Linux every check is a D-Bus call, and a slider drag sends a burst of updates
     if settings.get("tray_icon").is_some() {
@@ -235,10 +275,11 @@ fn bind(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
 fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let win = app.get_webview_window("main").expect("main window");
     let on_top = s["on_top"].as_bool().unwrap_or(true);
-    let size = SIZES.iter().position(|(id, _, _)| s["size"] == *id).unwrap_or(1);
+    let side = prefs::size(&s["size"]);
     let _ = win.set_always_on_top(on_top);
     if resize {
-        let _ = win.set_size(LogicalSize::new(SIZES[size].2, SIZES[size].2));
+        let _ = win.set_size(LogicalSize::new(side, side));
+        place::settle(app, false); // a bigger widget near an edge stays on screen
     }
     // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither
     let windowed = s["mode"] == "window" || !app.state::<State>().transparent;
@@ -249,12 +290,81 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         let _ = t.top.set_checked(on_top);
         let _ = t.ghost.set_checked(s["ghost"].as_bool().unwrap_or(false));
         let _ = t.ghost.set_enabled(!windowed);
-        for (k, item) in t.sizes.iter().enumerate() {
-            let _ = item.set_checked(k == size);
+        for (item, snap) in t.sizes.iter().zip(prefs::SNAPS) {
+            let _ = item.set_checked(side == snap.2);
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
+        tray_profiles(app, &t, s);
     }
     show_power(app, s);
+}
+
+// the tray's profiles: rebuilt when their names change, the one the settings match checked
+fn tray_profiles(app: &AppHandle, t: &Tray, s: &Value) {
+    let names = prefs::names(s);
+    let active = prefs::active(s);
+    let state = app.state::<State>();
+    let mut listed = state.tray_profiles.lock().unwrap();
+    if listed.as_ref() != Some(&names) {
+        if let Ok(items) = t.profiles.items() {
+            for item in items {
+                let _ = t.profiles.remove(&item);
+            }
+        }
+        let none = None::<&str>;
+        for (k, name) in names.iter().enumerate() {
+            if let Ok(item) = CheckMenuItem::with_id(app, format!("profile:{k}"), name, true, false, none) {
+                let _ = t.profiles.append(&item);
+            }
+        }
+        if names.is_empty() {
+            if let Ok(item) = MenuItem::with_id(app, "profile:none", "No Profiles Yet", false, none) {
+                let _ = t.profiles.append(&item);
+            }
+        }
+        if let (Ok(sep), Ok(item)) = (PredefinedMenuItem::separator(app), MenuItem::with_id(app, "settings", "Save or Manage in Settings…", true, none)) {
+            let _ = t.profiles.append(&sep);
+            let _ = t.profiles.append(&item);
+        }
+        *listed = Some(names.clone());
+    }
+    if let Ok(items) = t.profiles.items() {
+        for (item, name) in items.iter().filter_map(|i| i.as_check_menuitem()).zip(&names) {
+            let _ = item.set_checked(active.as_ref() == Some(name));
+        }
+    }
+}
+
+// wakes the snooze ticker when a snooze starts or ends
+struct SnoozeNudge(Condvar, Mutex<()>);
+
+// the snooze in the tray: how long it has left (every 30 s), and resume; at its end, notifications are back
+fn watch_snooze(app: AppHandle) {
+    app.manage(SnoozeNudge(Condvar::new(), Mutex::new(())));
+    std::thread::spawn(move || {
+        let mut shown = String::new();
+        loop {
+            let until = app.state::<State>().settings.lock().unwrap()["snooze_until"].as_f64().unwrap_or(0.0);
+            let left = (until - now_ms()) / 1000.0;
+            if until > 0.0 && left <= 0.0 {
+                let _ = set_settings(app.clone(), json!({ "snooze_until": 0 }));
+                continue;
+            }
+            let text = if left > 0.0 { format!("Notifications Snoozed · {} left", focus::left(left as i64)) } else { "Snooze Notifications".into() };
+            if text != shown {
+                let tray = app.state::<State>().tray.lock().unwrap().clone();
+                if let Some(t) = tray {
+                    let _ = t.snooze.set_text(&text);
+                    let _ = t.resume.set_enabled(left > 0.0);
+                }
+                shown = text;
+                publish(&app); // and settings shows the time left too
+            }
+            let nudge = app.state::<SnoozeNudge>();
+            let wait = if left > 0.0 { Duration::from_secs_f64(left.clamp(0.5, 30.0)) } else { Duration::from_secs(3600) };
+            drop(nudge.0.wait_timeout(nudge.1.lock().unwrap(), wait));
+        }
+    });
 }
 
 // the power level beside the menu-bar icon, or the icon alone when that's turned off. Windows trays have no title, so
@@ -309,6 +419,10 @@ fn show_widget(app: &AppHandle, show: bool) {
     app.state::<system::Sys>().auto_hidden.store(false, std::sync::atomic::Ordering::Relaxed); // shown or hidden by hand
     // and the page hears it from the app too, wherever document.hidden doesn't follow the window
     let _ = win.emit("shown", show);
+    #[cfg(feature = "rust-core")]
+    if !show && app.try_state::<photo::Photo>().is_some() {
+        photo::exit(app);
+    }
     let item = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.show.clone());
     if let Some(item) = item {
         let _ = item.set_text(if show { "Hide Planet" } else { "Show Planet" });
@@ -328,7 +442,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     }
     let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("settings")
-        .inner_size(380.0, 918.0)
+        .inner_size(400.0, 918.0)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(app.state::<State>().transparent)
         .shadow(true)
@@ -422,15 +536,90 @@ fn notify_hidden(app: &AppHandle, s: &Value, kind: &'static str, arg: &str) {
     notify(app.clone(), title, body.into());
 }
 
+// every notification, from the page or the hidden game: held back while snoozed, or while the OS is in Focus / Do Not
+// Disturb with that setting on. The Focus probe may take a D-Bus call or a file read: off the caller's thread
 #[tauri::command]
 fn notify(app: AppHandle, title: String, body: String) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app;
-        notes::post(title, body);
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    let (follow, until) = (s["follow_focus"].as_bool().unwrap_or(true), s["snooze_until"].as_f64().unwrap_or(0.0));
+    std::thread::spawn(move || {
+        let focus = if follow { focus::probe() } else { None };
+        if focus::hold(follow, focus, until, now_ms()) {
+            smoke(&format!("notification held: {title} (focus={focus:?}, snoozed={})", focus::snoozed(until, now_ms())));
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app;
+            notes::post(title, body);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app.notification().builder().title(title).body(body).show();
+    });
+}
+
+// is the OS in Focus / Do Not Disturb now: true, false, or null where it can't be told without a permission
+#[tauri::command]
+async fn focus_status() -> Option<bool> {
+    focus::probe()
+}
+
+// "30", "60", "180", "tomorrow", or "off" to resume
+#[tauri::command]
+fn snooze(app: AppHandle, choice: String) -> Result<(), String> {
+    let until = if choice == "off" {
+        0.0
+    } else {
+        let now = chrono::Local::now();
+        let end = focus::snooze_end(now.naive_local(), &choice).ok_or("no such snooze")?;
+        let end = end.and_local_timezone(chrono::Local).earliest().ok_or("no such local time")?;
+        end.timestamp_millis() as f64
+    };
+    smoke(&format!("snooze: {choice}"));
+    set_settings(app, json!({ "snooze_until": until }))
+}
+
+#[tauri::command]
+fn save_profile(app: AppHandle, name: String) -> Result<(), String> {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    set_settings(app, json!({ "profiles": prefs::save(&s, &name)? }))
+}
+
+#[tauri::command]
+fn delete_profile(app: AppHandle, name: String) -> Result<(), String> {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    set_settings(app, json!({ "profiles": prefs::delete(&s, &name) }))
+}
+
+#[tauri::command]
+fn apply_profile(app: AppHandle, name: String) -> Result<(), String> {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    let p = prefs::find(&s, &name).ok_or("no such profile")?;
+    smoke(&format!("profile: {name}"));
+    set_settings(app, p)
+}
+
+// the game's sound, switched in the widget: kept with the settings so a profile can carry it
+#[tauri::command]
+fn set_sound(app: AppHandle, on: bool) -> Result<(), String> {
+    if app.state::<State>().settings.lock().unwrap()["sound"] == json!(on) {
+        return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app.notification().builder().title(title).body(body).show();
+    set_settings(app, json!({ "sound": on }))
+}
+
+#[tauri::command]
+fn photo(app: AppHandle) {
+    #[cfg(feature = "rust-core")]
+    photo::enter(&app);
+    let _ = app;
+}
+
+#[tauri::command]
+fn photo_exit(app: AppHandle) {
+    #[cfg(feature = "rust-core")]
+    photo::exit(&app);
+    let _ = app;
 }
 
 // "granted", "denied", "ask" or "unavailable"
@@ -482,13 +671,21 @@ fn main() {
     let app = app.plugin(tauri_plugin_notification::init());
     macro_rules! handler {
         ($($m:ident)::+) => {
-            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings, page_state]
+            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings, page_state, focus_status, snooze, save_profile, delete_profile, apply_profile, set_sound, photo, photo_exit]
         };
     }
     #[cfg(not(feature = "rust-core"))]
     let app = app.invoke_handler(handler!(tauri::generate_handler));
     #[cfg(feature = "rust-core")]
     let app = app.invoke_handler(handler!(planet_commands));
+    // every move of the widget wakes the snap watcher, which acts once the drag is over
+    let app = app.on_window_event(|w, e| {
+        if let (tauri::WindowEvent::Moved(_), "main") = (e, w.label()) {
+            if let Some(m) = w.app_handle().try_state::<std::sync::Arc<place::Mover>>() {
+                m.moved();
+            }
+        }
+    });
     app.setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no dock icon: it lives in the menu bar
@@ -499,9 +696,10 @@ fn main() {
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
             app.manage(system::Sys::default());
-            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default() });
+            app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default(), tray_profiles: Mutex::new(None) });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
+            watch_snooze(app.handle().clone());
             update::start(app.handle());
             // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
             // bound at all, and settings says to use a desktop shortcut instead
@@ -541,9 +739,16 @@ fn main() {
                 let https = app.config().app.windows.iter().any(|w| w.label == "main" && w.use_https_scheme);
                 main.navigate(hud_url(&main.url()?, https))?;
                 planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
+                app.manage(photo::Photo::default());
+                let photo = MenuItem::with_id(app, "photo", "Photo Mode", true, None::<&str>)?;
+                if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {
+                    t.menu.insert(&photo, 2)?; // after settings
+                }
+                recap::watch(app.handle());
             }
             if !wayland {
                 watch_pointer(app.handle().clone());
+                place::watch(app.handle(), app.path().app_config_dir()?.join("places.json"));
             }
             system::watch(app.handle(), wayland);
             // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
@@ -659,21 +864,29 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, none)?;
     let top = CheckMenuItem::with_id(app, "top", "Always on Top", true, true, none)?;
     let ghost = CheckMenuItem::with_id(app, "ghost", "Ghost Mode (Click-Through)", true, false, none)?;
-    let sizes = SIZES
+    let sizes = prefs::SNAPS
         .iter()
-        .map(|(id, label, _)| CheckMenuItem::with_id(app, *id, *label, true, false, none))
+        .map(|(id, label, _)| CheckMenuItem::with_id(app, format!("size:{id}"), *label, true, false, none))
         .collect::<tauri::Result<Vec<_>>>()?;
-    let size = Submenu::with_items(app, "Size", true, &[&sizes[0], &sizes[1], &sizes[2]])?;
+    let more = MenuItem::with_id(app, "settings", "Any Size in Settings…", true, none)?;
+    let size = Submenu::with_items(app, "Size", true, &[&sizes[0], &sizes[1], &sizes[2], &PredefinedMenuItem::separator(app)?, &more])?;
+    let profiles = Submenu::with_items(app, "Profiles", true, &[])?;
+    let snoozes = [("30", "30 Minutes"), ("60", "1 Hour"), ("180", "3 Hours"), ("tomorrow", "Until Tomorrow")]
+        .iter()
+        .map(|(id, label)| MenuItem::with_id(app, format!("snooze:{id}"), *label, true, none))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let resume = MenuItem::with_id(app, "snooze:off", "Resume Notifications", false, none)?;
+    let snoozing = Submenu::with_items(app, "Snooze Notifications", true, &[&snoozes[0], &snoozes[1], &snoozes[2], &snoozes[3], &PredefinedMenuItem::separator(app)?, &resume])?;
     let login = CheckMenuItem::with_id(app, "login", "Launch at Login", true, false, none)?;
     let name = &app.package_info().name;
     let quit_item = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, none)?;
     let update = MenuItem::with_id(app, "update", "", true, none)?;
     let check = MenuItem::with_id(app, "check_update", "Check for Updates…", true, none)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &check, &sep, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &profiles, &snoozing, &login, &sep, &check, &sep, &quit_item])?;
     // only in builds that carry the screensaver (saver/README.md)
     if screensaver::bundled(app).is_some() {
-        menu.insert(&MenuItem::with_id(app, "screensaver", "Install Screensaver…", true, none)?, 6)?;
+        menu.insert(&MenuItem::with_id(app, "screensaver", "Install Screensaver…", true, none)?, 8)?;
     }
 
     // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
@@ -726,8 +939,24 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
                     let on = !app.autolaunch().is_enabled().unwrap_or(false);
                     let _ = set_settings(app, json!({ "login": on }));
                 }
-                size => {
-                    let _ = set_settings(app, json!({ "size": size }));
+                "photo" => photo(app),
+                id => {
+                    if let Some(size) = id.strip_prefix("size:") {
+                        let _ = set_settings(app, json!({ "size": size }));
+                    } else if let Some(choice) = id.strip_prefix("snooze:") {
+                        let _ = snooze(app, choice.into());
+                    } else if let Some(k) = id.strip_prefix("profile:").and_then(|k| k.parse::<usize>().ok()) {
+                        let s = app.state::<State>().settings.lock().unwrap().clone();
+                        if let Some(name) = prefs::names(&s).get(k).cloned() {
+                            let _ = apply_profile(app.clone(), name);
+                        }
+                        // a check item toggles itself on a click: put the checks back as the settings say
+                        let s = app.state::<State>().settings.lock().unwrap().clone();
+                        let tray = app.state::<State>().tray.lock().unwrap().clone();
+                        if let Some(t) = tray {
+                            tray_profiles(&app, &t, &s);
+                        }
+                    }
                 }
             }
         })
@@ -738,6 +967,9 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         top,
         ghost,
         sizes,
+        profiles,
+        snooze: snoozing,
+        resume,
         login,
         menu,
         update,
@@ -898,7 +1130,7 @@ mod tests {
         let s = super::initial_settings(Some(&saved));
         assert_eq!((s["fps"].clone(), s["menubar_power"].clone(), s["tray_icon"].clone()), (json!(30), json!(true), json!("auto")));
         assert_eq!(s["layout"], json!(7));
-        assert_eq!((s["on_top"].clone(), s["size"].clone(), s["mode"].clone()), (json!(false), json!("large"), json!("window")));
+        assert_eq!((s["on_top"].clone(), s["size"].clone(), s["mode"].clone()), (json!(false), json!(560), json!("window")), "large is 560 on the slider");
         assert_eq!(s["notify"]["pod"], json!(true));
         assert_eq!(s["quiet"]["from"], json!("23:00"));
         assert_eq!(s["shortcut"], json!("Alt+Cmd+KeyO"));
@@ -916,9 +1148,22 @@ mod tests {
         let s = super::initial_settings(Some(&saved));
         assert_eq!((s["ghost"].clone(), s["battery_auto"].clone()), (json!(false), json!(true)));
         assert_eq!(s["auto_hide"], json!(!cfg!(target_os = "linux")));
-        assert_eq!((s["fps"].clone(), s["size"].clone(), s["menubar_power"].clone()), (json!(15), json!("small"), json!(false)));
+        assert_eq!((s["fps"].clone(), s["size"].clone(), s["menubar_power"].clone()), (json!(15), json!(300), json!(false)));
         let picked = super::initial_settings(Some(&json!({ "ghost": true, "auto_hide": false, "battery_auto": false })));
         assert_eq!((picked["ghost"].clone(), picked["auto_hide"].clone(), picked["battery_auto"].clone()), (json!(true), json!(false), json!(false)));
+    }
+
+    // a settings.json from before this batch: the size slider takes its preset, and the new settings their defaults; a
+    // saved game sound (null until the widget says) and profiles come back as saved
+    #[test]
+    fn a_0_2_x_settings_file_gets_the_new_settings() {
+        let s = super::initial_settings(Some(&json!({ "size": "medium", "ghost": true })));
+        assert_eq!(s["size"], json!(400));
+        assert_eq!((s["follow_focus"].clone(), s["recap"].clone(), s["snooze_until"].clone()), (json!(true), json!(true), json!(0)));
+        assert_eq!((s["sound"].clone(), s["profiles"].clone()), (json!(null), json!([])));
+        let profiles = json!([{ "name": "Work", "settings": { "size": 300, "ghost": true } }]);
+        let s = super::initial_settings(Some(&json!({ "size": 452, "sound": true, "profiles": profiles })));
+        assert_eq!((s["size"].clone(), s["sound"].clone(), s["profiles"].clone()), (json!(452), json!(true), profiles));
     }
 
     // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
@@ -939,16 +1184,16 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
-        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "planet_step", "planet_load", "planet_save"] {
+        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save"] {
             assert!(!call(&main, cmd), "main may not call {cmd}");
         }
-        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings"] {
+        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings", "focus_status", "snooze", "save_profile", "delete_profile", "apply_profile"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
         }
     }
