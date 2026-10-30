@@ -164,4 +164,17 @@ What each step bought (release builds, medium, default settings, measured as in 
 - Idle, the layer now takes 39% less energy than the web view (75 against 123 mW) and 42% less than in 5b; hovered, 70% less than the web view (83 against 278 mW, which draws at 60fps there) and 47% less than 5b. It also comes in under the canvas path, idle and hovered. Hidden, nothing changed.
 
 - The step that moved energy is the present: utility QoS alone gained nothing while every frame still went to the main thread on a performance core.
-- Wakeups hardly change: the app wakes about 300 times a second in every build, the web view's too, so they likely come from the web view's side of the process (the HUD page still runs page.html's `requestAnimationFrame` loop, with nothing to draw). Stopping that loop in HUD mode is a next step, in the game repo.
+- Wakeups hardly change: the app wakes about 300 times a second in every build, the web view's too. They came from the HUD page's `requestAnimationFrame` loop, which ran with nothing to draw: WebKit drives rAF from a display link in the app process. The page no longer starts it when the app runs the game (idle 343 → 141 wakeups/s, hovered 341 → 173; see [The HUD page at rest](#the-hud-page-at-rest)).
+
+### The HUD page at rest
+
+page.html's frame loop (`tick`) steps and draws game.js and the site's title; on the Rust core the widget's page has neither, so it doesn't start (`game.native`, set by `hud.js`). Nothing else on the page runs while nothing changes: its timers are one-shot and event-driven, and its infinite CSS animations are on elements the widget hides. Measured as above (four interleaved rounds, medium, default settings, load 12-20):
+
+| | wakeups/s | CPU, whole widget (median) | energy, mean (median) | of which the app | of which WebContent |
+|---|---|---|---|---|---|
+| 0.2.1, idle | 343 | 8.5% | 164 mW (164) | 5.5% / 124 mW | 2.7% / 35 mW |
+| no rAF loop, idle | 141 | 5.2% | 109 mW (119) | 4.4% / 96 mW | 0.9% / 12 mW |
+| 0.2.1, hovered | 341 | 9.9% | 183 mW (185) | 5.8% / 131 mW | 3.1% / 41 mW |
+| no rAF loop, hovered | 173 | 6.9% | 145 mW (145) | 4.7% / 115 mW | 1.4% / 21 mW |
+
+The ~115 wakeups a second left idle are the app's own: the 30 fps tick, its `planet` events and the layer's present.
