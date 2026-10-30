@@ -284,9 +284,37 @@ fn work_dir(base: &Path) -> Result<PathBuf, String> {
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
     b.create(base).map_err(|e| format!("couldn't make a download folder ({e})"))?;
+    #[cfg(unix)]
+    check_base(base)?;
     let dir = base.join(unique("update-"));
     fresh_dir(&dir)?;
     Ok(dir)
+}
+
+/// the download folder must be a real folder (not a symlink), this user's, and writable by no one else
+#[cfg(unix)]
+fn check_base(base: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let m = std::fs::symlink_metadata(base).map_err(|e| format!("couldn't check {} ({e})", base.display()))?;
+    // this process's uid is the owner of a file it makes
+    let probe = base.join(unique(".owner-"));
+    let me = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).and_then(|f| f.metadata()).map(|p| p.uid());
+    let _ = std::fs::remove_file(&probe);
+    let me = me.unwrap_or(u32::MAX);
+    base_verdict(m.file_type().is_dir(), m.permissions().mode(), m.uid(), me).map_err(|why| format!("the update folder {} {why}: not updating", base.display()))
+}
+
+#[cfg(unix)]
+fn base_verdict(is_dir: bool, mode: u32, owner: u32, me: u32) -> Result<(), &'static str> {
+    if !is_dir {
+        Err("isn't a folder (a symlink, or a file)")
+    } else if mode & 0o022 != 0 {
+        Err("can be written by other users")
+    } else if owner != me {
+        Err("belongs to another user")
+    } else {
+        Ok(())
+    }
 }
 
 /// removes what earlier updates left in `base` more than a day ago (Windows keeps the installer it ran)
@@ -515,14 +543,27 @@ fn swap(staged: &Path, dest: &Path, old: &Path) -> Result<(), String> {
 /// copies the checked file into a fresh folder `stage` beside `dest` (created new, never through an existing path),
 /// then renames it over `dest`
 #[cfg(any(target_os = "linux", all(test, unix)))]
-fn replace_file(file: &Path, dest: &Path, stage: &Path) -> Result<(), String> {
+fn replace_file(file: &Path, dest: &Path, stage: &Path, sha256: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
     use std::os::unix::fs::OpenOptionsExt;
     fresh_dir(stage)?;
     let staged = stage.join("new");
+    // hashed again as it's copied, through the one descriptor the copy reads: what's installed is what was checked
     let copied = (|| {
         let mut from = std::fs::File::open(file)?;
         let mut to = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o755).open(&staged)?;
-        std::io::copy(&mut from, &mut to)?;
+        let (mut hash, mut buf) = (Sha256::new(), vec![0u8; 1 << 16]);
+        loop {
+            let n = from.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&buf[..n]);
+            to.write_all(&buf[..n])?;
+        }
+        if hex(&hash.finalize()) != sha256 {
+            return Err(std::io::Error::other("the download changed after it was checked"));
+        }
         to.sync_all()?;
         std::fs::rename(&staged, dest)
     })();
@@ -531,9 +572,9 @@ fn replace_file(file: &Path, dest: &Path, stage: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn install_appimage(file: &Path, dest: &Path) -> Result<(), String> {
+fn install_appimage(file: &Path, dest: &Path, sha256: &str) -> Result<(), String> {
     let parent = dest.parent().ok_or("the AppImage has no folder")?;
-    replace_file(file, dest, &parent.join(unique(".idle-fighterz-update-")))
+    replace_file(file, dest, &parent.join(unique(".idle-fighterz-update-")), sha256)
 }
 
 // what the AppImage runtime and its GTK hooks put in the environment: they point into this copy's mount
@@ -597,18 +638,20 @@ pub struct Updater {
     told: Mutex<Option<Version>>, // the version the automatic check last announced
     busy: AtomicBool,
     last: Mutex<Option<SystemTime>>,
-    dir: PathBuf, // where downloads go: the app's local data folder, not the shared temp folder
+    dir: Option<PathBuf>, // where downloads go: the app's local data folder (never the shared temp folder)
 }
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// checks on launch and then once a day while the setting is on (manual checks always work)
 pub fn start(app: &AppHandle) {
-    let dir = app.path().app_local_data_dir().map(|d| d.join("updates")).unwrap_or_else(|_| std::env::temp_dir().join("idle-fighterz-updates"));
+    let dir = app.path().app_local_data_dir().ok().map(|d| d.join("updates"));
     app.manage(Updater { dir, ..Default::default() });
     let app = app.clone();
     std::thread::spawn(move || {
-        sweep(&app.state::<Updater>().dir);
+        if let Some(dir) = &app.state::<Updater>().dir {
+            sweep(dir);
+        }
         std::thread::sleep(Duration::from_secs(5));
         loop {
             let on = app.state::<crate::State>().settings.lock().unwrap()["update_check"].as_bool().unwrap_or(true);
@@ -759,7 +802,8 @@ pub fn install_now(app: &AppHandle) {
 
 // everything is checked before anything is replaced. Err: nothing was installed
 fn install(app: &AppHandle, release: &Release, how: &How, suffix: &str) -> Result<Done, String> {
-    let work = work_dir(&app.state::<Updater>().dir)?;
+    let base = app.state::<Updater>().dir.clone().ok_or("there's no folder for updates (the app's local data folder is unknown)")?;
+    let work = work_dir(&base)?;
     let fetched = tauri::async_runtime::block_on(fetch(&Source::get(), release, suffix, &work));
     let done = fetched.and_then(|(file, sha256)| {
         let _ = &sha256;
@@ -773,7 +817,7 @@ fn install(app: &AppHandle, release: &Release, how: &How, suffix: &str) -> Resul
             How::Setup => run_installer(&file, &sha256).map(|_| Done::Restarting),
             #[cfg(target_os = "linux")]
             How::AppImage(dest) => {
-                install_appimage(&file, dest)?;
+                install_appimage(&file, dest, &sha256)?;
                 Ok(relaunch(&dest.to_string_lossy(), &[], true).map_or(Done::Reopen, |_| Done::Restarting))
             }
             _ => Err("this copy can't update itself".into()),
@@ -1015,22 +1059,57 @@ mod tests {
     #[test]
     fn a_file_is_replaced_through_a_fresh_folder_only() {
         use std::os::unix::fs::PermissionsExt;
+        let sha = |s: &str| hex(&Sha256::digest(s.as_bytes()));
         let dir = work_dir(&base()).unwrap();
         let (new, dest) = (dir.join("download"), dir.join("idle-fighterz"));
         std::fs::write(&new, "v2").unwrap();
         std::fs::write(&dest, "v1").unwrap();
-        replace_file(&new, &dest, &dir.join(".stage")).unwrap();
+        replace_file(&new, &dest, &dir.join(".stage"), &sha("v2")).unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "v2");
         assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o755);
+        assert!(!dir.join(".stage").exists());
+        // the download changed after it was checked: refused, the old copy stays
+        std::fs::write(&new, "v3").unwrap();
+        assert!(replace_file(&new, &dest, &dir.join(".stage"), &sha("v2")).unwrap_err().contains("changed after it was checked"));
         assert!(!dir.join(".stage").exists());
         // a symlink planted where the staging folder goes: refused, and nothing is written through it
         let elsewhere = dir.join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, dir.join(".planted")).unwrap();
-        std::fs::write(&new, "v3").unwrap();
-        assert!(replace_file(&new, &dest, &dir.join(".planted")).is_err());
+        assert!(replace_file(&new, &dest, &dir.join(".planted"), &sha("v3")).is_err());
         assert_eq!((std::fs::read_to_string(&dest).unwrap().as_str(), std::fs::read_dir(&elsewhere).unwrap().count()), ("v2", 0));
         std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_private_download_folder_is_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = base();
+        // made fresh: private to this user, and used
+        let ok = root.join("ok");
+        let dir = work_dir(&ok).unwrap();
+        assert_eq!(std::fs::metadata(&ok).unwrap().permissions().mode() & 0o777, 0o700);
+        assert!(dir.starts_with(&ok));
+        // a symlink where the folder goes (to a folder this user owns, even): refused, nothing made through it
+        let target = root.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, root.join("link")).unwrap();
+        assert!(work_dir(&root.join("link")).unwrap_err().contains("isn't a folder"));
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        // a folder others can write to (as a pre-made one in a shared temp folder would be): refused
+        let open = root.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(work_dir(&open).unwrap_err().contains("can be written by other users"));
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(work_dir(&open).is_err(), "group-writable");
+        assert_eq!(std::fs::read_dir(&open).unwrap().count(), 0);
+        // another user's folder (not something a test can make): the rule itself
+        assert_eq!(base_verdict(true, 0o40700, 501, 501), Ok(()));
+        assert_eq!(base_verdict(true, 0o40755, 0, 501), Err("belongs to another user"));
+        assert_eq!(base_verdict(false, 0o120777, 501, 501), Err("isn't a folder (a symlink, or a file)"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(unix)]
