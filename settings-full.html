@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>settings</title>
+<link rel="stylesheet" href="fonts.css">
+<style>
+/* the full settings window (settings_style "full"): a live preview on the left, the settings in tabs on the right.
+   Every setting of the compact window (settings.html) is here too; main.rs's tests check the two keep the same rows */
+:root { --ink: #0b0b0b; --muted: #8d8d8d; --line: #ececec; --gold: #d99a1c; --bg: #fcfcfb; --card: #fff; --seg: #efefec; --on: #fff; --track: #dcdcd8; --edge: rgba(0,0,0,.14); color-scheme: light; }
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #f1efea; --muted: #9a978f; --line: #2c2c31; --bg: #1c1c20; --card: #242429; --seg: #2d2d33; --on: #3a3a41; --track: #44444b; --edge: rgba(255,255,255,.14); color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: transparent; }
+body { color: var(--ink); font: 12px/1.45 "Fragment Mono", ui-monospace, Menlo, monospace; -webkit-user-select: none; user-select: none; cursor: default; }
+.win { display: flex; flex-direction: column; height: 100%; background: var(--bg); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; }
+.bar { flex: none; display: flex; align-items: center; justify-content: center; position: relative; height: 34px; border-bottom: 1px solid var(--line); background: var(--card); }
+.bar span { color: var(--muted); text-transform: lowercase; letter-spacing: .02em; }
+.x { position: absolute; right: 8px; top: 6px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: var(--muted); background: none; border: 0; border-radius: 50%; cursor: pointer; }
+.x:hover { color: var(--ink); background: var(--seg); }
+.x svg { width: 12px; height: 12px; }
+.body { flex: 1; display: grid; grid-template-columns: 272px 1fr; min-height: 0; }
+
+/* the preview */
+.pv { padding: 14px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+h4, h2 { margin: 0; font: inherit; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.stage { position: relative; height: 244px; border-radius: 10px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); background-size: cover; background-position: center; }
+.stage.l { background-image: radial-gradient(60% 80% at 15% 20%, #ffd6bf, #ffd6bf00 62%), radial-gradient(55% 70% at 88% 26%, #c3d8ff, #c3d8ff00 62%); background-color: #f1ece6; }
+.stage.d { background-image: radial-gradient(60% 80% at 15% 22%, #3a2378, #3a237800 62%), radial-gradient(55% 70% at 86% 30%, #0d4a6e, #0d4a6e00 62%); background-color: #0a0b16; }
+.live { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 5px; align-items: center; padding: 2px 7px; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: #333; background: rgba(255,255,255,.85); border-radius: 999px; }
+.live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #2fbf5a; }
+.live.off::before { background: #aaa; }
+/* the widget at its size, 400 points across scaled into the stage: the planet's last frame and a drawing of the hud */
+.wv { position: absolute; left: 50%; top: 50%; width: 400px; height: 400px; transform-origin: 50% 50%; font: 11.5px/1.2 "Fragment Mono", ui-monospace, monospace; color: #0b0b0b; transition: transform .25s; }
+.wv canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.wv.win { background: #fcfcfb; border: 1px solid rgba(0,0,0,.14); border-radius: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }
+.wv .h { position: absolute; inset: 0; transition: opacity .3s; }
+.wv:not(.awake) .h { opacity: 0; }
+.chip { background: rgba(255,255,255,.94); border: 1px solid rgba(0,0,0,.08); box-shadow: 0 2px 10px rgba(0,0,0,.18); }
+.hn { font-family: "Instrument Serif", Georgia, serif; font-size: 22px; line-height: 1; letter-spacing: -.02em; }
+.hr { color: #8d8d8d; font-size: 9px; text-transform: uppercase; }
+.hb { display: flex; gap: 3px; } .hb i { width: 22px; height: 22px; border-radius: 50%; background: #f2f2ef; } .hb i.k { background: #e0332b; }
+.hbar { height: 3px; border-radius: 3px; background: #ececec; overflow: hidden; } .hbar b { display: block; height: 100%; background: var(--gold); }
+.hdock { position: absolute; left: 6px; right: 6px; bottom: 6px; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 999px; }
+.hdock .mid { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 9px; color: #8d8d8d; }
+.hring { position: absolute; left: 50%; top: 55%; width: 320px; height: 320px; margin: -160px 0 0 -160px; border-radius: 50%; border: 3px solid #ececec; }
+.hring b { position: absolute; inset: -3px; border-radius: 50%; border: 3px solid var(--gold); clip-path: polygon(50% 50%, 50% 0, 100% 0, 100% 40%); }
+.htopn { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); padding: 4px 12px; border-radius: 999px; display: flex; gap: 6px; align-items: baseline; }
+.hpill { position: absolute; left: 10px; right: 10px; bottom: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 16px; flex-wrap: wrap; }
+.hpill .hbar { flex-basis: 100%; }
+.hcorner { position: absolute; padding: 6px 10px; border-radius: 12px; }
+.hstrip { position: absolute; left: 8px; right: 8px; top: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 12px; flex-wrap: wrap; }
+.hstrip .hbar { flex-basis: 100%; }
+.banner { position: absolute; right: 8px; top: 8px; z-index: 3; width: 200px; display: flex; gap: 7px; align-items: center; padding: 7px 8px; font: 10px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif; color: #1d1d1f; background: rgba(246,246,246,.94); border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,.28); opacity: 0; transform: translateY(-8px); transition: opacity .3s, transform .3s; pointer-events: none; }
+.banner.on { opacity: 1; transform: none; }
+.banner img { width: 22px; height: 22px; border-radius: 5px; }
+.banner b { display: block; font-weight: 600; }
+.wps { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; }
+.wps button { width: 22px; height: 22px; padding: 0; border-radius: 6px; border: 2px solid transparent; cursor: pointer; background-size: cover; }
+.wps button.on { border-color: var(--gold); }
+.wps .l { background: linear-gradient(135deg, #ffd6bf, #c3d8ff); } .wps .d { background: linear-gradient(135deg, #3a2378, #0d4a6e); } .wps .o { background: conic-gradient(#e66, #ec6, #6c8, #6ae, #a6e, #e66); }
+.hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.hint b { color: var(--ink); font-weight: 400; }
+
+/* the settings */
+main { display: flex; flex-direction: column; min-height: 0; }
+.top { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px 8px; }
+.tabs { display: flex; gap: 2px; padding: 2px; background: var(--seg); border-radius: 8px; }
+.tabs button, .seg button { font: inherit; text-transform: lowercase; padding: 3px 9px; color: var(--muted); background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.tabs button { padding: 3px 10px; }
+.tabs button.on, .seg button.on { color: var(--ink); background: var(--on); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.searching .tabs { opacity: .4; }
+.find { flex: 1; min-width: 0; }
+.find input { width: 100%; font: inherit; padding: 4px 10px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 999px; outline: none; -webkit-user-select: text; user-select: text; }
+.find input:focus { border-color: var(--gold); }
+.panes { flex: 1; overflow: auto; padding: 0 18px 16px; }
+.panes::-webkit-scrollbar { width: 6px; } .panes::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
+section[data-tab] { display: none; }
+section[data-tab].on, .searching section[data-tab] { display: block; }
+section > h3 { display: none; margin: 14px 0 2px; font: inherit; font-size: 10px; color: var(--gold); text-transform: uppercase; letter-spacing: .05em; }
+.searching section > h3 { display: block; }
+h2 { margin: 12px 0 6px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; border-bottom: 1px solid var(--line); }
+.row span { text-transform: lowercase; }
+.row small { color: var(--muted); }
+.row b { font-weight: inherit; }
+.row[hidden], .miss { display: none !important; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; align-items: start; }
+.seg { display: flex; gap: 2px; padding: 2px; background: var(--seg); border-radius: 8px; flex: none; }
+.seg button:disabled { opacity: .4; cursor: default; }
+input[type="checkbox"] { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: var(--track); position: relative; transition: background .15s; cursor: pointer; flex: none; }
+input[type="checkbox"]::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+input[type="checkbox"]:checked { background: var(--gold); }
+input[type="checkbox"]:checked::after { transform: translateX(12px); }
+input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+input[type="range"] { width: 120px; accent-color: var(--gold); }
+input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
+.name { width: 170px; padding: 2px 8px; -webkit-user-select: text; user-select: text; }
+.pill { font: inherit; text-transform: lowercase; padding: 3px 10px; color: var(--ink); background: var(--seg); border: 0; border-radius: 999px; cursor: pointer; }
+.pill:hover { filter: brightness(.96); }
+.pill:disabled { opacity: .4; cursor: default; }
+.key { min-width: 64px; font: inherit; padding: 3px 10px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.key.rec { color: var(--gold); border-color: var(--gold); }
+.keys { display: flex; align-items: center; gap: 4px; }
+.keys .pill { padding: 3px 8px; color: var(--muted); }
+.row small.err { color: #c0392b; }
+.note { margin: 0; padding: 6px 0 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.size { display: flex; align-items: center; gap: 6px; }
+.size .seg button { padding: 3px 7px; }
+/* layout cards */
+.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 4px; }
+.cards button { font: inherit; font-size: 10px; padding: 6px 4px 5px; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 9px; cursor: pointer; text-transform: lowercase; }
+.cards button.on { color: var(--ink); border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.cards svg { display: block; width: 100%; height: 44px; margin-bottom: 3px; }
+/* notifications */
+.ntrow { display: grid; grid-template-columns: 22px 1fr auto auto; align-items: center; gap: 8px; min-height: 34px; border-bottom: 1px solid var(--line); }
+.ntrow .em { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--seg); }
+.ntrow .pill { padding: 1px 7px; font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 6px; }
+.ntrow.sel .pill { color: var(--ink); border-color: var(--gold); }
+.toast { display: flex; gap: 8px; align-items: center; margin: 4px 0 6px; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14); }
+.toast img { width: 28px; height: 28px; border-radius: 6px; }
+.toast b { display: block; font-weight: 400; } .toast span { color: var(--muted); font-size: 11px; }
+.qh { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.qh[aria-disabled="true"] { opacity: .45; }
+.qh[aria-disabled="true"] input { pointer-events: none; }
+.clock { position: relative; height: 10px; border-radius: 5px; background: var(--seg); overflow: hidden; }
+.clock i { position: absolute; top: 0; bottom: 0; background: #7a6ae0; opacity: .85; }
+.clock u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); }
+.ticks { display: flex; justify-content: space-between; grid-column: 2; margin-top: -6px; font-size: 9px; color: var(--muted); }
+#snz button { padding: 3px 7px; }
+.ref { margin: 8px 0 0; padding: 0; list-style: none; }
+.ref li { display: flex; justify-content: space-between; gap: 12px; min-height: 30px; align-items: center; border-bottom: 1px solid var(--line); color: var(--muted); }
+.ref kbd { font: inherit; color: var(--ink); padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; }
+.about { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.about img { width: 44px; height: 44px; }
+.about b { display: block; font: italic 24px/1 "Instrument Serif", Georgia, serif; text-transform: none; }
+.quit { display: block; width: 100%; margin-top: 18px; padding: 8px; font: inherit; text-transform: lowercase; color: var(--bg); background: var(--ink); border: 0; border-radius: 999px; cursor: pointer; }
+#none { color: var(--muted); padding: 12px 0; }
+</style>
+</head>
+<body>
+<div class="win">
+<div class="bar" data-tauri-drag-region><span data-tauri-drag-region>settings</span><button type="button" class="x" id="close" aria-label="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>
+<div class="body">
+<aside class="pv">
+  <h4>preview</h4>
+  <div class="stage l" id="stage"><span class="live" id="live">live</span><div class="banner" id="banner"><img src="icon.png" alt=""><div><b id="bt"></b><span id="bb"></span></div></div><div class="wv" id="wv"><canvas id="cv" width="1" height="1"></canvas><div class="h" id="hud"></div></div></div>
+  <div class="wps">wallpaper <button type="button" class="l" data-wp="l" aria-label="light"></button><button type="button" class="d" data-wp="d" aria-label="dark"></button><button type="button" class="o" data-wp="o" aria-label="your own" title="your own picture"></button><input type="file" id="own" accept="image/*" hidden></div>
+  <p class="hint" id="hint">every change shows here first. <b>hover</b> the preview to see the hud wake.</p>
+</aside>
+<main id="main">
+  <div class="top">
+    <div class="tabs" id="tabs" role="tablist"><button data-t="look" class="on">look</button><button data-t="play">behaviour</button><button data-t="notify">notifications</button><button data-t="keys">keys</button><button data-t="about">about</button></div>
+    <div class="find"><input type="search" id="q" placeholder="search" aria-label="search settings" autocomplete="off" spellcheck="false"></div>
+  </div>
+  <div class="panes" id="panes">
+  <p id="none" hidden>nothing matches</p>
+
+  <section data-tab="look" class="on" data-name="look"><h3>look</h3>
+    <h2>layout</h2>
+    <div class="cards" data-s="layout" id="cards"></div>
+    <div class="grid2"><div>
+      <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
+      <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
+      <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+      <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
+      <div class="row" data-s="theme" id="themerow" hidden><span>theme</span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
+      <label class="row" data-s="skin" id="skinrow" hidden><span>skin</span><select data-sel="skin" id="skin"></select></label>
+      <label class="row" data-s="menubar_power"><span>power in <b class="barname">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
+    </div><div>
+      <label class="row" data-s="opacity"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
+      <div class="row" data-s="clouds"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">hover</button><button data-v="never">never</button></div></div>
+      <label class="row" data-s="cloud_shape"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
+      <label class="row" data-s="cloud_amount"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
+      <div class="row" data-s="tray_icon" id="trayrow" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
+      <div class="row" data-s="settings_style"><span>settings window</span><div class="seg" data-seg="settings_style"><button data-v="compact">compact</button><button data-v="full">full</button></div></div>
+    </div></div>
+  </section>
+
+  <section data-tab="play" data-name="behaviour"><h3>behaviour</h3>
+    <div class="grid2"><div>
+      <label class="row" data-s="on_top"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
+      <label class="row" data-s="ghost"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
+      <label class="row" id="hiderow" data-s="auto_hide"><span>hide for fullscreen apps</span><input type="checkbox" data-k="auto_hide"></label>
+      <label class="row" data-s="sound"><span>game sound</span><input type="checkbox" data-k="sound"></label>
+      <label class="row" data-s="recap"><span>away recap <small>a toast when back</small></span><input type="checkbox" data-k="recap"></label>
+    </div><div>
+      <div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">saver</button></div></div>
+      <label class="row" data-s="battery_auto"><span>saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
+      <label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
+      <div class="row" data-s="tray_style"><span><b class="barname">menu bar</b> click <small id="trayv"></small></span><div class="seg" data-seg="tray_style"><button data-v="menu">menu</button><button data-v="popover">popover</button></div></div>
+    </div></div>
+    <h2>profiles</h2>
+    <div id="profiles"></div>
+    <div class="row" data-s="profile"><input type="text" class="name" id="pname" placeholder="name, e.g. work" maxlength="24" aria-label="profile name" autocomplete="off" spellcheck="false"><button type="button" class="pill" id="psave">save current</button></div>
+    <p class="note" id="pnote" data-s="profile">a profile keeps how the widget looks and behaves; switch from the tray too.</p>
+  </section>
+
+  <section data-tab="notify" data-name="notifications"><h3>notifications</h3>
+    <div class="row" data-s="permission"><span><b id="os">macos</b> <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
+    <div class="grid2" style="grid-template-columns: 1.25fr 1fr"><div id="nts"></div><div>
+      <h2>preview</h2>
+      <div class="toast"><img src="icon.png" alt=""><div><b id="tt"></b><span id="tb"></span></div></div>
+      <h2>quiet hours</h2>
+      <label class="row" data-s="quiet"><span>quiet hours</span><input type="checkbox" id="quiet"></label>
+      <div class="qh" data-s="quiet" id="qh"><input type="time" id="from" aria-label="quiet from"><div class="clock" id="clock" title="quiet hours across the day"></div><input type="time" id="to" aria-label="quiet until"><div class="ticks"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div></div>
+      <label class="row" data-s="follow_focus"><span>quiet in focus <small id="focusv"></small></span><input type="checkbox" data-k="follow_focus"></label>
+      <div class="row" data-s="snooze"><span>snooze <small id="snoozev"></small></span></div>
+      <div class="row" data-s="snooze"><div class="seg" id="snz"><button data-v="30">30m</button><button data-v="60">1h</button><button data-v="180">3h</button><button data-v="tomorrow">tmrw</button><button data-v="off" id="resume">resume</button></div></div>
+    </div></div>
+  </section>
+
+  <section data-tab="keys" data-name="keys"><h3>keys</h3>
+    <div class="row" data-s="shortcut"><span>show / hide <small id="keyerr"></small></span><div class="keys"><small id="nokeys" hidden>not on wayland</small><button type="button" class="key" id="key"></button><button type="button" class="pill" id="nokey" aria-label="no shortcut">off</button></div></div>
+    <p class="note" id="wlnote" data-s="shortcut" hidden>wayland lets no app grab a key for itself. to show the widget from the keyboard, add a shortcut in your desktop's settings that runs <b id="wlcmd">idle-fighterz</b>: opening it again brings the widget back.</p>
+    <ul class="ref" id="ref"></ul>
+  </section>
+
+  <section data-tab="about" data-name="about"><h3>about</h3>
+    <div class="about"><img src="icon.png" alt=""><div><b id="appname">Idle FighterZ</b><small id="ver" style="color:var(--muted)"></small></div></div>
+    <label class="row" data-s="update_check"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
+    <div class="row" data-s="intro"><span>first-run intro <small>the three tips on the widget</small></span><button type="button" class="pill" id="intro">show the intro again</button></div>
+    <button type="button" class="quit" id="quit">quit</button>
+  </section>
+  </div>
+</main>
+</div>
+</div>
+
+<script src="settings-search.js"></script>
+<script>
+const { invoke } = window.__TAURI__.core, $ = id => document.getElementById(id), all = q => [...document.querySelectorAll(q)];
+const set = settings => invoke('set_settings', { settings });
+let s = {}, MAC = true;
+
+// the tabs, and the one last open (this window only)
+const remember = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const recall = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+function tab(t) {
+  for (const b of all('#tabs button')) b.classList.toggle('on', b.dataset.t === t);
+  for (const p of all('section[data-tab]')) p.classList.toggle('on', p.dataset.tab === t);
+  $('hint').innerHTML = t === 'notify' ? 'try a notification to see it on the desktop, and in the list beside it.' : 'every change shows here first. <b>hover</b> the preview to see the hud wake.';
+  remember('tab', t);
+}
+$('tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { $('q').value = ''; filter(); tab(b.dataset.t); } });
+tab(['look', 'play', 'notify', 'keys', 'about'].includes(recall('tab')) ? recall('tab') : 'look');
+
+// layout cards, drawn
+const LAYOUTS = [[7, 'dock'], [1, 'ring'], [2, 'pill'], [3, 'corners'], [6, 'strip']];
+function cards() {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches, ink = dark ? '#e8e6e1' : '#fff', st = dark ? '#555' : '#ccc';
+  const D = {
+    7: `<rect x="10" y="34" width="40" height="6" rx="3" fill="${ink}" stroke="${st}"/><rect x="14" y="36" width="10" height="2" fill="#999"/>`,
+    1: `<circle cx="30" cy="20" r="14" fill="none" stroke="#d99a1c" stroke-width="1.4"/><rect x="22" y="3" width="16" height="5" rx="2.5" fill="${ink}" stroke="${st}"/>`,
+    2: `<rect x="4" y="34" width="52" height="6" rx="3" fill="${ink}" stroke="${st}"/>`,
+    3: `<rect x="4" y="4" width="14" height="7" rx="2" fill="${ink}" stroke="${st}"/><circle cx="52" cy="7" r="3" fill="${ink}" stroke="${st}"/><circle cx="7" cy="38" r="3" fill="${ink}" stroke="${st}"/><circle cx="52" cy="38" r="3" fill="${ink}" stroke="${st}"/>`,
+    6: `<rect x="4" y="4" width="52" height="6" rx="2" fill="${ink}" stroke="${st}"/>`,
+  };
+  $('cards').innerHTML = LAYOUTS.map(([v, n]) => `<button type="button" data-v="${v}" class="${s.layout === v ? 'on' : ''}"><svg viewBox="0 0 60 44" aria-hidden="true"><rect x=".5" y=".5" width="59" height="43" rx="6" fill="${dark ? '#2b2b31' : '#f4f1ec'}"/><circle cx="30" cy="20" r="9" fill="#5cc4a0"/>${D[v]}</svg>${n}</button>`).join('');
+}
+$('cards').addEventListener('click', e => { const b = e.target.closest('button'); if (b) set({ layout: +b.dataset.v }); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { cards(); if (!recall('wp')) wallpaper(); });
+
+// notifications, each with a preview
+const NOTE = {
+  raid: ['r', 'villain raids', 'cell is attacking', 'tap him before he gets away'],
+  shenron: ['d', 'the dragon is summoned', 'the eternal dragon awakens', 'make your wish'],
+  trip: ['t', 'trips to other worlds', 'off to namek', 'a space pod takes you there'],
+  pod: ['p', 'space pods', 'a saiyan space pod', 'tap it for ×2'],
+  ascend: ['a', 'ascend is available', 'you can ascend', 'reset for ki seeds and a lasting boost'],
+};
+$('nts').innerHTML = Object.entries(NOTE).map(([k, [e, n]]) => `<div class="ntrow" data-s="notify" data-kind="${k}"><span class="em">${e}</span><span>${n}</span><button type="button" class="pill" data-try="${k}">try</button><input type="checkbox" data-n="${k}" aria-label="${n}"></div>`).join('');
+let bannerAt = 0;
+function preview(k, banner) {
+  const [, , t, b] = NOTE[k]; $('tt').textContent = t; $('tb').textContent = b;
+  for (const r of all('.ntrow')) r.classList.toggle('sel', r.dataset.kind === k);
+  if (!banner) return;
+  $('bt').textContent = t; $('bb').textContent = b; $('banner').classList.add('on');
+  clearTimeout(bannerAt); bannerAt = setTimeout(() => $('banner').classList.remove('on'), 3000);
+}
+$('nts').addEventListener('click', e => { const b = e.target.closest('[data-try]'); if (b) preview(b.dataset.try, true); });
+preview('raid');
+
+// quiet hours as a bar across the day, with now marked
+const mins = hm => { const [h, m] = String(hm).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+function clock() {
+  const a = mins(s.quiet.from) / 1440 * 100, b = mins(s.quiet.to) / 1440 * 100, d = new Date(), now = (d.getHours() * 60 + d.getMinutes()) / 1440 * 100;
+  const seg = (x, y) => `<i style="left:${x}%;width:${Math.max(0, y - x)}%"></i>`;
+  $('clock').innerHTML = (a <= b ? seg(a, b) : seg(0, b) + seg(a, 100)) + `<u style="left:${now}%"></u>`;
+  $('clock').title = `quiet from ${s.quiet.from} to ${s.quiet.to}`;
+}
+
+// widget keys, for reference (the show / hide shortcut above is the one you set)
+const REF = () => [[MAC ? '⌥ drag' : 'alt drag', 'move the widget from anywhere on it'], ['P', 'photo mode'], ['esc', 'close the upgrades'], [MAC ? '⌘F' : 'ctrl F', 'search these settings']];
+
+function render(v) {
+  s = v; MAC = s.os === 'macos';
+  all('[data-k]').forEach(i => { i.checked = !!s[i.dataset.k]; });
+  all('[data-n]').forEach(i => { i.checked = !!s.notify[i.dataset.n]; });
+  all('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg === 'fps' ? 'fps_pick' : g.dataset.seg]) === b.dataset.v)));
+  all('[data-sel]').forEach(e => { if (s[e.dataset.sel] !== undefined) e.value = s[e.dataset.sel]; });
+  cards();
+  $('camt').value = s.cloud_amount; $('cav').textContent = s.cloud_amount;
+  $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
+  $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('qh').setAttribute('aria-disabled', String(!s.quiet.on)); clock();
+  if (!recording) showKey();
+  $('os').textContent = MAC ? 'macos' : s.os === 'windows' ? 'windows' : 'system';
+  all('.barname').forEach(b => { b.textContent = MAC ? 'menu bar' : 'tray'; });
+  $('trayrow').hidden = MAC;
+  $('battv').textContent = s.battery_saving ? 'on now' : '';
+  $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through' + (s.wayland ? '' : ', hold ' + (MAC ? '⌥' : 'alt'));
+  $('hiderow').hidden = !!s.wayland;
+  document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
+  $('nokeys').hidden = $('wlnote').hidden = !s.wayland; $('key').hidden = !!s.wayland; $('wlcmd').textContent = s.name.toLowerCase().replace(/ /g, '-');
+  // linux's tray (AppIndicator) reports no clicks: only the menu
+  document.querySelector('[data-seg="tray_style"] [data-v="popover"]').disabled = !s.popover_ok;
+  $('trayv').textContent = s.popover_ok ? (s.tray_style === 'popover' ? 'right-click for the menu' : '') : 'not on linux';
+  // skin and theme (feat/hud-skins): shown once the app keeps them
+  $('themerow').hidden = !('theme' in s);
+  $('skinrow').hidden = !('skin' in s);
+  if ('skin' in s) skins();
+  $('quit').textContent = 'quit ' + s.name.toLowerCase();
+  $('appname').textContent = s.name; $('ver').textContent = 'version ' + s.version;
+  if (!sliding()) $('size').value = s.size;
+  showSize(s.size);
+  profiles();
+  $('snoozev').textContent = s.snooze_left ? s.snooze_left + ' left' : '';
+  $('resume').disabled = !s.snooze_left;
+  $('ref').innerHTML = REF().map(([k, t]) => `<li><span>${t}</span><kbd>${k}</kbd></li>`).join('');
+  look();
+  filter();
+}
+// the skins the app lists (s.skins), else the one it has now
+function skins() {
+  const list = Array.isArray(s.skins) && s.skins.length ? s.skins : [s.skin];
+  const key = list.join();
+  if ($('skin').dataset.k !== key) { $('skin').dataset.k = key; $('skin').innerHTML = list.map(k => `<option value="${esc(k)}">${esc(String(k).replace(/_/g, ' '))}</option>`).join(''); }
+  $('skin').value = s.skin;
+}
+
+// the size slider, its snap points as s / m / l
+const SNAPS = { 300: 'small', 400: 'medium', 560: 'large' };
+const showSize = v => {
+  $('szv').textContent = v + (SNAPS[v] ? ' · ' + SNAPS[v] : '') + ' · ' + (v >= 520 ? '2×' : '1×');
+  for (const b of $('snapseg').children) b.classList.toggle('on', +b.dataset.v === v);
+};
+let slidAt = -1e9, settle = 0;
+const sliding = () => document.activeElement === $('size') || performance.now() - slidAt < 1200;
+const settleSize = () => { if (!sliding()) $('size').value = s.size; else { clearTimeout(settle); settle = setTimeout(settleSize, 300); } };
+$('size').addEventListener('input', () => { slidAt = performance.now(); set({ size: +$('size').value }); settleSize(); });
+$('size').addEventListener('blur', settleSize);
+$('snapseg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) set({ size: +b.dataset.v }); });
+
+// profiles, as in the compact window
+const esc = t => String(t).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+let listed = '';
+function profiles() {
+  const list = s.profiles || [], key = JSON.stringify([list.map(p => p.name), s.profile]);
+  if (key === listed) return; listed = key;
+  $('profiles').innerHTML = list.map((p, k) => `<div class="row" data-s="profile"><span>${esc(p.name.toLowerCase())} <small>${p.name === s.profile ? 'on now' : ''}</small></span><div class="keys"><button type="button" class="pill" data-use="${k}"${p.name === s.profile ? ' disabled' : ''}>use</button><button type="button" class="pill" data-del="${k}" aria-label="delete ${esc(p.name)}">×</button></div></div>`).join('');
+}
+$('profiles').addEventListener('click', e => {
+  const b = e.target.closest('button'), list = s.profiles || []; if (!b) return;
+  if (b.dataset.use) invoke('apply_profile', { name: list[+b.dataset.use].name });
+  if (b.dataset.del) invoke('delete_profile', { name: list[+b.dataset.del].name });
+});
+const pnote = $('pnote').textContent;
+const saveProfile = () => invoke('save_profile', { name: $('pname').value }).then(() => { $('pname').value = ''; $('pnote').textContent = pnote; }).catch(e => { $('pnote').textContent = String(e); });
+$('psave').addEventListener('click', saveProfile);
+$('pname').addEventListener('keydown', e => { if (e.key === 'Enter') saveProfile(); });
+
+$('snz').addEventListener('click', e => { const b = e.target.closest('button'); if (b) invoke('snooze', { choice: b.dataset.v }); });
+const FOCUS = { true: 'on now', false: 'off now', null: "can't tell here" };
+const checkFocus = () => invoke('focus_status').then(f => { $('focusv').textContent = FOCUS[f]; });
+
+// search: across every tab, rows whose words, section or synonyms start with what's typed. Esc clears it
+function filter() {
+  const q = $('q').value, on = !!q.trim(); let any = false;
+  $('main').classList.toggle('searching', on);
+  for (const sec of all('section[data-tab]')) {
+    let shown = 0;
+    for (const r of sec.querySelectorAll('[data-s]')) {
+      const ok = SettingsSearch.matches(q, r.textContent, r.dataset.s, sec.dataset.name); r.classList.toggle('miss', !ok); if (ok && !r.hidden) shown++;
+    }
+    for (const h of sec.querySelectorAll('h2, .ref, .about, .toast')) h.classList.toggle('miss', on);
+    sec.querySelector('.quit')?.classList.toggle('miss', on && !SettingsSearch.matches(q, 'quit', 'quit', ''));
+    sec.classList.toggle('miss', on && !shown);
+    any = any || shown > 0;
+  }
+  $('none').hidden = !on || any;
+}
+$('q').addEventListener('input', filter);
+$('q').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('q').value) { e.stopPropagation(); $('q').value = ''; filter(); }
+  if (e.key === 'ArrowDown' || e.key === 'Enter') { const first = all('#panes [data-s]:not(.miss) :is(input, button, select)').find(c => !c.closest('[hidden], .miss') && !c.disabled && c.offsetParent); if (first) { e.preventDefault(); first.focus(); } }
+});
+addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'f') { e.preventDefault(); $('q').focus(); $('q').select(); } });
+addEventListener('focus', () => { checkFocus(); checkPerm(); });
+checkFocus();
+
+all('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
+all('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
+all('[data-n]').forEach(i => i.addEventListener('change', () => { set({ notify: { [i.dataset.n]: i.checked } }); if (i.checked) preview(i.dataset.n); if (i.checked && perm === 'ask') invoke('request_notify_permission'); }));
+all('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.disabled) return; const k = g.dataset.seg; set({ [k]: k === 'fps' ? +b.dataset.v : b.dataset.v }); }));
+$('camt').addEventListener('input', () => { $('cav').textContent = $('camt').value; set({ cloud_amount: +$('camt').value }); });
+$('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity').value + '%'; set({ opacity: $('opacity').value / 100 }); });
+$('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));
+for (const k of ['from', 'to']) $(k).addEventListener('change', () => set({ quiet: { [k]: $(k).value } }));
+$('intro').addEventListener('click', () => set({ onboarded: false }).then(() => { $('intro').textContent = 'on the widget now'; setTimeout(() => { $('intro').textContent = 'show the intro again'; }, 2500); }));
+$('quit').addEventListener('click', () => invoke('quit'));
+
+// notification permission (macOS asks once)
+const PERM = { granted: ['allowed', ''], ask: ['not asked yet', 'allow'], denied: ['blocked', 'open settings'], unavailable: ['only in the installed app', ''] };
+let perm = '';
+function showPerm(p) { perm = p; const [text, btn] = PERM[p] || PERM.ask; $('permv').textContent = text; $('perm').textContent = btn; $('perm').hidden = !btn; }
+const checkPerm = () => invoke('notify_permission').then(showPerm);
+$('perm').addEventListener('click', () => invoke(perm === 'denied' ? 'open_notify_settings' : 'request_notify_permission'));
+window.__TAURI__.event.listen('permission', e => showPerm(e.payload));
+checkPerm();
+
+// the show / hide shortcut: click, then press the keys
+const MODS = [['ctrlKey', 'Ctrl', '⌃'], ['altKey', 'Alt', '⌥'], ['shiftKey', 'Shift', '⇧'], ['metaKey', 'Cmd', '⌘']];
+const SYM = Object.fromEntries(MODS.map(([, k, sy]) => [k, sy]));
+const keyName = p => MAC ? SYM[p] || p : p === 'Cmd' ? 'Super' : p;
+const keyText = sc => sc ? sc.split('+').map(p => keyName(p).replace(/^(Key|Digit)/, '').replace(/^Arrow/, '')).join(MAC ? '' : '+') : 'none';
+let recording = false;
+function showKey() { recording = false; $('key').classList.remove('rec'); $('key').textContent = keyText(s.shortcut); $('nokey').hidden = !s.shortcut || !!s.wayland; }
+function setKey(sc) { $('keyerr').textContent = ''; set({ shortcut: sc }).catch(() => { $('keyerr').textContent = 'taken'; showKey(); }); }
+$('key').addEventListener('click', () => { recording = true; $('key').classList.add('rec'); $('key').textContent = 'press keys…'; $('keyerr').textContent = ''; });
+$('key').addEventListener('blur', () => recording && showKey());
+$('nokey').addEventListener('click', () => setKey(''));
+addEventListener('keydown', e => {
+  if (!recording) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (e.key === 'Escape') return showKey();
+  if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Fn'].includes(e.key)) return;
+  if (!(e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.code))) { $('keyerr').textContent = MAC ? 'add ⌘, ⌃ or ⌥' : 'add ctrl or alt'; return; }
+  recording = false; setKey([...MODS.filter(([m]) => e[m]).map(([, k]) => k), e.code].join('+'));
+}, true);
+
+// ── the preview: the widget's last frame from the app (no second game: it's the one on the desktop), a drawing of
+// the hud in the layout picked, at the size, opacity and mode picked, over a wallpaper. It asks a few times a second,
+// only while this window shows
+function wallpaper() {
+  const pick = recall('wp') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'd' : 'l'), own = pick === 'o' && recall('wpimg');
+  $('stage').className = 'stage ' + (own ? '' : pick === 'o' ? 'l' : pick);
+  $('stage').style.backgroundImage = own ? `url("${own}")` : '';
+  for (const b of all('[data-wp]')) b.classList.toggle('on', b.dataset.wp === (own ? 'o' : pick === 'o' ? 'l' : pick));
+}
+document.querySelector('.wps').addEventListener('click', e => {
+  const b = e.target.closest('[data-wp]'); if (!b) return;
+  if (b.dataset.wp === 'o') return $('own').click();
+  remember('wp', b.dataset.wp); wallpaper();
+});
+$('own').addEventListener('change', () => {
+  const f = $('own').files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    // scaled down to the stage before it's kept, so any photo fits in storage
+    const img = new Image();
+    img.onload = () => { const c = document.createElement('canvas'), k = Math.min(1, 600 / Math.max(img.width, img.height)); c.width = img.width * k; c.height = img.height * k; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); remember('wpimg', c.toDataURL('image/jpeg', .85)); remember('wp', 'o'); wallpaper(); };
+    img.src = r.result;
+  };
+  r.readAsDataURL(f);
+});
+wallpaper();
+
+let g = null;
+const SHORT = ['', 'K', 'M', 'B', 'T'];
+const short = n => { n = Math.floor(n); if (n < 1000) return String(n); let e = Math.floor(Math.log10(n) / 3), m = n / 10 ** (e * 3); if (+m.toFixed(1) >= 1000) { e++; m /= 1000; } return e < SHORT.length ? m.toFixed(1) + SHORT[e] : n.toExponential(1).replace('+', ''); };
+const num = n => n < 1e12 ? Math.floor(n).toLocaleString('en-US') : short(n);
+function look() {
+  // the 400-point box at the widget's size, where 720 (the slider's top) fills the stage
+  const wv = $('wv'), k = ($('stage').getBoundingClientRect().height - 12) / 720 * (s.size || 400) / 400;
+  wv.style.transform = `translate(-50%, -50%) scale(${k.toFixed(3)})`;
+  wv.style.opacity = s.opacity;
+  wv.classList.toggle('win', s.mode === 'window');
+  wv.classList.toggle('awake', s.hud === 'always' || hovered);
+  hud();
+}
+let hovered = false;
+$('stage').addEventListener('pointerenter', () => { hovered = true; look(); });
+$('stage').addEventListener('pointerleave', () => { hovered = false; look(); });
+function hud() {
+  const h = g && g.hud, pl = h ? num(h.pl) : s.power || '0', rate = h ? short(h.rate) + '/s' : '', f = h ? h.form : { name: 'base', x: 1, next: '', p: 0 };
+  const form = f.name === 'base' ? (f.next ? '→ ' + f.next : '') : `${f.name} ×${f.x}`, p = (f.p * 100).toFixed(1) + '%';
+  const btns = `<span class="hb"><i></i><i class="k"></i><i></i><i></i><i></i></span>`, bar = `<span class="hbar"><b style="width:${p}"></b></span>`;
+  const n = `<span class="hn">${esc(pl)}</span>`;
+  const L = {
+    7: `<div class="hdock chip"><div>${n}<div class="hr">${esc(rate)}</div></div><div class="mid"><span>${esc(form)}</span>${bar}</div>${btns}</div>`,
+    1: `<div class="hring"><b></b></div><div class="htopn chip">${n}<span class="hr">${esc(rate)}</span></div>`,
+    2: `<div class="hpill chip">${n}<span class="hr">${esc(rate)}</span><span style="flex:1"></span>${btns}${bar}</div>`,
+    3: `<div class="hcorner chip" style="left:8px;top:8px">${n} <span class="hr">${esc(rate)}</span>${bar}</div><div class="hcorner" style="right:8px;bottom:8px;padding:0">${btns}</div>`,
+    6: `<div class="hstrip chip">${n}<span class="hr">${esc(rate)}</span><span style="flex:1"></span>${btns}${bar}</div>`,
+  };
+  const html = L[s.layout] || L[7];
+  if ($('hud').dataset.html !== html) { $('hud').dataset.html = html; $('hud').innerHTML = html; }
+}
+
+const cv = $('cv'), ctx = cv.getContext('2d');
+let busy = false;
+async function frame() {
+  if (busy || document.hidden) return; busy = true;
+  try {
+    const b = await invoke('preview_frame');
+    const buf = b instanceof ArrayBuffer ? b : new Uint8Array(b).buffer;
+    $('live').classList.toggle('off', buf.byteLength < 8);
+    if (buf.byteLength >= 8) {
+      const v = new DataView(buf), w = v.getUint32(0, true), h = v.getUint32(4, true);
+      if (w && h && buf.byteLength === 8 + w * h * 4) {
+        if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 8), w, h), 0, 0);
+      }
+    }
+  } catch (e) { $('live').classList.add('off'); }
+  busy = false;
+}
+const glance = () => document.hidden ? null : invoke('glance').then(v => { g = v.game; s.power = v.power; hud(); }).catch(() => {});
+setInterval(frame, 200); setInterval(glance, 1000); setInterval(() => { if (!document.hidden) clock(); }, 60000);
+document.addEventListener('visibilitychange', () => { frame(); glance(); });
+
+const close = () => window.__TAURI__.window.getCurrentWindow().close();
+$('close').addEventListener('click', close);
+addEventListener('keydown', e => { if ((e.key === 'Escape' && !e.defaultPrevented) || ((MAC ? e.metaKey : e.ctrlKey) && e.key === 'w')) close(); });
+invoke('get_settings').then(v => { render(v); frame(); glance(); $('q').focus(); });
+window.__TAURI__.event.listen('settings', e => render(e.payload));
+</script>
+</body>
+</html>

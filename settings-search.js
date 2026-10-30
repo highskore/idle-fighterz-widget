@@ -29,6 +29,11 @@
     quiet: 'quiet hours night sleep schedule silence mute do not disturb dnd',
     follow_focus: 'focus do not disturb dnd focus assist silence mute quiet banners',
     snooze: 'snooze pause mute silence later resume quiet do not disturb dnd',
+    settings_style: 'settings window compact full wide preview tabs style',
+    tray_style: 'menu bar tray popover click icon scouter quick',
+    intro: 'intro onboarding welcome tutorial tips first run help again',
+    theme: 'dark light auto mode appearance colour color',
+    skin: 'look style hud design scouter capsule manga',
   };
   const words = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
   // `text`: the row's own words; `key`: its setting (for synonyms); `section`: the heading it's under

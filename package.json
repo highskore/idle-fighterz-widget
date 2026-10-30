@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "page": "node game/build.mjs --widget && cp settings.html settings-search.js dist/ && node scripts/hud.mjs",
+    "page": "node game/build.mjs --widget && cp settings.html settings-search.js dist/ && node scripts/hud.mjs && node scripts/pages.mjs",
     "test": "node --test test/settings-search.test.cjs",
     "icons": "node scripts/icons.mjs",
     "clouds": "node scripts/clouds.mjs",
