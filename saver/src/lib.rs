@@ -2,7 +2,7 @@
 //! its own on the Rust core. The macOS .saver (saver/macos) calls the C functions at the bottom; the Windows .scr
 //! (scr.rs) uses `Saver` directly.
 
-use planet_core::{bridge::Bridge, num, Game, DT};
+use planet_core::{big::Big, bridge::Bridge, num, Game, DT};
 use planet_render::{
     scene::{Scene, View},
     Framebuffer,
@@ -197,9 +197,15 @@ impl Demo {
     }
 }
 
-/// widget.js `short`, as the widget's menu-bar power level: 1.2K, 3.4M, 5.6B, then 7.8e12.
-pub fn short(n: f64) -> String {
+/// widget.js `short`, as the widget's menu-bar power level: 1.2K, 3.4M, 5.6B, then 7.8e12; past 1e300, page.html's
+/// `sci` (4.5e1,204).
+pub fn short(n: impl Into<Big>) -> String {
     const SUF: [&str; 4] = ["", "K", "M", "B"];
+    let n = n.into();
+    let Some(n) = n.as_plain() else {
+        let (m, x) = num::sci(n, 1);
+        return m + &x;
+    };
     let n = n.floor();
     if !n.is_finite() || n < 1000.0 {
         return num::js_string(n);
@@ -389,6 +395,7 @@ mod tests {
         assert_eq!(short(999_950.0), "1.0M");
         assert_eq!(short(5.6e9), "5.6B");
         assert_eq!(short(7.8e12), "7.8e12");
+        assert_eq!(short(Big::new(4.5, 1204)), "4.5e1,204");
     }
 
     #[test]
