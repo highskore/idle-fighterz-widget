@@ -22,12 +22,13 @@ mod native;
 #[cfg(feature = "rust-core")]
 #[macro_use]
 mod planet;
+mod update;
 
 // window sides in points, square: the planet sits in the middle with room for its visitors
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto",
+  "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "shortcut": "Alt+Cmd+KeyP"
@@ -43,8 +44,9 @@ struct Tray {
     top: CheckMenuItem<Wry>,
     sizes: Vec<CheckMenuItem<Wry>>,
     login: CheckMenuItem<Wry>,
-    #[cfg(target_os = "linux")]
     menu: Menu<Wry>,
+    update: MenuItem<Wry>, // "Update to X.Y.Z", in the menu only while there is one
+    check: MenuItem<Wry>,
     #[cfg(target_os = "linux")]
     power: MenuItem<Wry>, // a greyed-out first item, in the menu only while the power level is shown
 }
@@ -302,7 +304,7 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     }
     let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("settings")
-        .inner_size(380.0, 883.0)
+        .inner_size(380.0, 918.0)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(app.state::<State>().transparent)
         .shadow(true)
@@ -475,6 +477,7 @@ fn main() {
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default() });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
+            update::start(app.handle());
             // global-hotkey is an X11 key grab: on Wayland it only fires while an XWayland window has focus, so it isn't
             // bound at all, and settings says to use a desktop shortcut instead
             if wayland {
@@ -624,8 +627,10 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let login = CheckMenuItem::with_id(app, "login", "Launch at Login", true, false, none)?;
     let name = &app.package_info().name;
     let quit_item = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, none)?;
+    let update = MenuItem::with_id(app, "update", "", true, none)?;
+    let check = MenuItem::with_id(app, "check_update", "Check for Updates…", true, none)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &check, &sep, &quit_item])?;
 
     // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
     // match the taskbar (or as picked in settings), and follows it when the theme changes
@@ -658,6 +663,9 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
                     });
                 }
                 "quit" => quit(app),
+                // both wait on the network: off the main thread
+                "check_update" => drop(std::thread::spawn(move || update::check_now(&app, true))),
+                "update" => drop(std::thread::spawn(move || update::install_now(&app))),
                 "top" => {
                     let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
                     let _ = set_settings(app, json!({ "on_top": on }));
@@ -677,8 +685,9 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         top,
         sizes,
         login,
-        #[cfg(target_os = "linux")]
         menu,
+        update,
+        check,
         #[cfg(target_os = "linux")]
         power: MenuItem::with_id(app, "power", "", false, none)?,
     };

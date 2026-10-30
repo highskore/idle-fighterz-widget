@@ -86,6 +86,8 @@ GAMES.push({
       queue = queue.then(() => (stale ? refresh() : null)).then(() => deliver(m)).catch(e => console.error(e));
     });
     ui.onBuy(key => call('buy', { key }));
+    // the app's own news (an update is out, or the answer to a check), as the game's toasts
+    tauri.event.listen('notice', ({ payload }) => ui.event(payload, 8000));
 
     st.cv.addEventListener('pointerdown', e => call('pointer_down', { ...ptr(e), button: e.button, touch: e.pointerType === 'touch' }));
     st.cv.addEventListener('pointermove', e => call('pointer_move', ptr(e)));
