@@ -169,6 +169,12 @@ mod win {
         let full = APP.with(|a| a.borrow().as_ref().is_some_and(|a| a.full));
         match msg {
             WM_TIMER => {
+                // a preview whose dialog went without destroying it first (its window belongs to another process)
+                let parent = GetParent(hwnd);
+                if !full && (parent.is_null() || IsWindow(parent) == 0) {
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
                 let fresh = APP.with(|a| a.borrow_mut().as_mut().is_some_and(take));
                 if fresh {
                     InvalidateRect(hwnd, std::ptr::null(), 0);

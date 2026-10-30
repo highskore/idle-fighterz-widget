@@ -86,8 +86,8 @@ jobs:
           $p = Start-Process $scr -ArgumentList '/p', $f.Handle -PassThru
           for ($i = 0; $i -lt 20; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 250 }
           if ($p.HasExited) { throw "/p exited with $($p.ExitCode)" }
-          $f.Close()
-          [System.Windows.Forms.Application]::DoEvents()
+          $f.Close(); $f.Dispose()
+          for ($i = 0; $i -lt 4; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
           if (-not $p.WaitForExit(5000)) { Stop-Process $p; throw "/p outlived its preview window" }
           '/s and /p ran, and /p ended with its window'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

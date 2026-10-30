@@ -207,8 +207,9 @@ impl Core {
                 // the page never said its size: the game's own
                 p.painter.resize(SIZE.0, SIZE.1, SIZE.2);
             }
+            // leaving a step and a half, so float error can't leave less than the one step to draw
             while elapsed > 2.0 * DT {
-                let piece = (elapsed - DT).min(PIECE);
+                let piece = (elapsed - 1.5 * DT).min(PIECE);
                 b.step(piece, now_ms);
                 elapsed -= piece;
             }
