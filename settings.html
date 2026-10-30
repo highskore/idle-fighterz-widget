@@ -69,6 +69,8 @@ main::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 3px; }
 <label class="row" data-s="on_top"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
 <label class="row" data-s="size"><span>size <small id="szv"></small></span><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-describedby="szv"></label>
 <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
+<div class="row" data-s="skin"><span>skin</span><div class="seg" data-seg="skin"><button data-v="classic">classic</button><button data-v="scouter">scouter</button><button data-v="capsule">capsule</button><button data-v="drawer">drawer</button></div></div>
+<div class="row" data-s="theme"><span>theme <small id="themev"></small></span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
 <div class="row" data-s="layout"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
 <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
 <div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
@@ -132,6 +134,9 @@ function render(v) {
   $('trayrow').hidden = MAC;
   // balanced drops to battery saver on battery or in low power mode (main.rs); an explicit pick stays
   $('battv').textContent = s.battery_saving ? 'on now' : '';
+  // the scouter is always dark and capsule corp always light; the layouts are classic's
+  $('themev').textContent = { scouter: 'always dark', capsule: 'always light' }[s.skin] || '';
+  document.querySelectorAll('[data-seg="layout"] button').forEach(b => { b.disabled = s.skin !== 'classic'; });
   // clicks go through a floating widget; ⌥ held takes them again (not on wayland, which shows apps no keys but their own)
   $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through, ' + (s.wayland ? 'off from the tray' : 'hold ' + (MAC ? '⌥' : 'alt') + ' to use it');
   $('hiderow').hidden = !!s.wayland;

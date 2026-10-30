@@ -6,6 +6,8 @@
     on_top: 'pin float above front over windows',
     size: 'scale zoom big bigger small smaller resize large medium width',
     layout: 'dock ring pill corners strip hud position',
+    skin: 'look style design appearance hud scouter capsule corp drawer classic',
+    theme: 'dark mode light auto appearance night colour color',
     hud: 'interface overlay buttons power level show',
     fps: 'frame rate fps smooth performance cpu speed animation',
     battery_auto: 'power battery unplugged laptop energy low power mode saver',
