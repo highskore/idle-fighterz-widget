@@ -2,8 +2,8 @@
 #   brew install --cask highskore/tap/idle-fighterz
 # packaging/bump-cask.sh fills in version and sha256 from a published release.
 cask "idle-fighterz" do
-  version "0.2.0"
-  sha256 "070285de6d0e48e429e9db31b5f85bffba3bd619b7f62a3ca47edcfb40427d06"
+  version "0.2.1"
+  sha256 "bfbad16748b021c10ddc4d2ff675bb2b47627f3cff7fc4ccd177187bc4a6858a"
 
   url "https://github.com/highskore/idle-fighterz-widget/releases/download/desktop-v#{version}/IdleFighterZ_#{version}_universal.dmg"
   name "Idle FighterZ"
