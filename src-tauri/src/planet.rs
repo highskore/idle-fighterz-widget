@@ -1245,8 +1245,8 @@ mod tests {
         const WIN_FREE: (u32, u32) = (640, 420);
         // (hook, canvas, frames, clouds: None for window mode, Some("") for none, Some("c2") for shape c amount 2)
         type Case<'a> = (&'a str, (u32, u32), u32, Option<&'a str>);
-        // no #shenron: the summon is a storm on the Rust engine since game PR #35, and game.js (frozen) keeps the old one
-        let cases: [Case; 27] = [
+        // no #shenron (a storm on Rust since game PR #35) or #raid (boss intro and mechanics since game #51/#52): game.js is frozen
+        let cases: [Case; 25] = [
             ("", MEDIUM, 200, Some("")),
             ("", MEDIUM, 200, Some("c2")),
             ("", SMALL, 200, Some("c2")),
@@ -1256,7 +1256,6 @@ mod tests {
             ("", MEDIUM, 200, Some("d4")),
             ("", LARGE, 200, Some("e5")),
             ("#namek", MEDIUM, 400, Some("")),
-            ("#raid", LARGE, 300, Some("c2")),
             ("#snake", MEDIUM, 400, Some("")),
             ("#snake", MEDIUM, 1810, Some("c2")),
             ("#top", MEDIUM, 60, Some("c3")),
@@ -1273,7 +1272,6 @@ mod tests {
             ("#kame", WIN_FREE, 400, None),
             ("#cooler", WIN_M, 600, None),
             ("#lookout", WIN_L, 400, None),
-            ("#raid", WIN_FREE, 300, None),
         ];
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/frame.cjs");
         let tmp = std::env::temp_dir().join(format!("idle-fighterz-frames-{}", std::process::id()));
