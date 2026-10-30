@@ -6,7 +6,7 @@ use std::{fs, path::PathBuf, sync::{mpsc::Sender, Condvar, Mutex}, time::Duratio
 use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -17,6 +17,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 mod focus;
 mod place;
+mod popover;
 mod prefs;
 mod system;
 #[cfg(target_os = "macos")]
@@ -40,7 +41,8 @@ const DEFAULTS: &str = r#"{
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true,
   "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [],
-  "shortcut": "Alt+Cmd+KeyP"
+  "shortcut": "Alt+Cmd+KeyP",
+  "settings_style": "compact", "tray_style": "menu", "onboarded": false
 }"#;
 #[cfg(not(target_os = "macos"))]
 const SHORTCUT: &str = "Ctrl+Alt+KeyP"; // Win+Alt+P / Super+Alt+P belong to the desktop; ⌥⌘P stays the macOS default
@@ -173,6 +175,8 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     let left = (s["snooze_until"].as_f64().unwrap_or(0.0) - now_ms()) / 1000.0;
     s["snooze_left"] = json!(if left > 0.0 { focus::left(left as i64) } else { String::new() });
     s["photo"] = json!(photo_ready(app));
+    s["version"] = json!(app.package_info().version.to_string());
+    s["popover_ok"] = json!(cfg!(not(target_os = "linux")));
     s
 }
 
@@ -218,6 +222,7 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         settings["size"] = json!(prefs::size(&settings["size"]) as u64);
     }
     let state = app.state::<State>();
+    let was_style = state.settings.lock().unwrap()["settings_style"].clone();
     let s = {
         let mut cur = state.settings.lock().unwrap();
         merge(&mut cur, &settings);
@@ -236,6 +241,13 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         }
     }
     app.state::<Shown>().poke();
+    if s["settings_style"] != was_style {
+        restyle_settings(&app, &s["settings_style"]);
+    }
+    // "show the intro again": the card is on the widget, so the widget shows
+    if settings.get("onboarded") == Some(&json!(false)) {
+        show_widget(&app, true);
+    }
     // only a new pick: on Linux every check is a D-Bus call, and a slider drag sends a burst of updates
     if settings.get("tray_icon").is_some() {
         if let Some(nudge) = app.state::<State>().tray_nudge.lock().unwrap().as_ref() {
@@ -295,6 +307,14 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         }
         let _ = t.login.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
         tray_profiles(app, &t, s);
+    }
+    // the popover opens on a left click; right-click (and ⌃-click) keeps the menu
+    let pop = prefs::popover(&s["tray_style"]);
+    if let Some(tray) = app.tray_by_id("tray") {
+        let _ = tray.set_show_menu_on_left_click(!pop);
+    }
+    if !pop {
+        popover::hide(app);
     }
     show_power(app, s);
 }
@@ -440,9 +460,11 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
         w.show()?;
         return w.set_focus();
     }
-    let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+    let style = app.state::<State>().settings.lock().unwrap()["settings_style"].clone();
+    let (page, width, height) = prefs::settings_page(&style);
+    let w = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App(page.into()))
         .title("settings")
-        .inner_size(400.0, 918.0)
+        .inner_size(width, height)
         .decorations(false) // the page draws its own slim title bar with a close button
         .transparent(app.state::<State>().transparent)
         .shadow(true)
@@ -452,6 +474,16 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
         .center()
         .build()?;
     w.set_focus()
+}
+
+// the settings style changed: an open settings window becomes the other one, resized and centred where it is
+fn restyle_settings(app: &AppHandle, style: &Value) {
+    let Some(w) = app.get_webview_window("settings") else { return };
+    let (page, width, height) = prefs::settings_page(style);
+    let Ok(url) = w.url().and_then(|u| u.join(page).map_err(|e| tauri::Error::Anyhow(e.into()))) else { return };
+    let _ = w.set_size(LogicalSize::new(width, height));
+    let _ = w.center();
+    let _ = w.navigate(url);
 }
 
 #[tauri::command]
@@ -622,6 +654,61 @@ fn photo_exit(app: AppHandle) {
     let _ = app;
 }
 
+// The game at a glance for the popover and the settings preview: the menu-bar power level, and on the Rust core the HUD,
+// the upgrades ready and the world; with the tray's own state (shown, login, an update) for the popover's items
+#[tauri::command]
+fn glance(app: AppHandle) -> Value {
+    #[cfg(feature = "rust-core")]
+    let game = app.try_state::<planet::Core>().and_then(|c| c.glance()).and_then(|g| serde_json::from_str::<Value>(&g).ok());
+    #[cfg(not(feature = "rust-core"))]
+    let game: Option<Value> = None;
+    let shown = app.state::<Shown>().get();
+    let tray = app.state::<State>().tray.lock().unwrap().clone();
+    let update = tray.filter(|t| t.menu.get(t.update.id()).is_some() && t.update.is_enabled().unwrap_or(false)).and_then(|t| t.update.text().ok());
+    json!({
+        "power": app.state::<State>().power.lock().unwrap().clone(),
+        "game": game,
+        "shown": shown,
+        "update": update,
+        "screensaver": screensaver::bundled(&app).is_some(),
+    })
+}
+
+// The widget's last frame for the settings preview: its width and height (u32, little-endian), then RGBA. Empty while
+// the game runs in the web view (no frames here)
+#[tauri::command]
+fn preview_frame(app: AppHandle) -> tauri::ipc::Response {
+    #[cfg(feature = "rust-core")]
+    if let Some((rgba, w, h, _)) = app.try_state::<planet::Core>().and_then(|c| c.frame()) {
+        let mut out = Vec::with_capacity(8 + rgba.len());
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&rgba);
+        return tauri::ipc::Response::new(out);
+    }
+    let _ = app;
+    tauri::ipc::Response::new(Vec::new())
+}
+
+// the popover's items do what the tray menu's do, by the same ids; then it closes
+#[tauri::command]
+fn tray_action(app: AppHandle, id: String) {
+    popover::hide(&app);
+    menu_action(app, &id);
+}
+
+// the first-run card, finished or skipped: it doesn't show again (until settings' "show the intro again")
+#[tauri::command]
+fn intro_done(app: AppHandle) -> Result<(), String> {
+    smoke("intro done");
+    set_settings(app, json!({ "onboarded": true }))
+}
+
+#[tauri::command]
+fn hide_popover(app: AppHandle) {
+    popover::hide(&app);
+}
+
 // "granted", "denied", "ask" or "unavailable"
 #[tauri::command]
 async fn notify_permission() -> &'static str {
@@ -671,7 +758,7 @@ fn main() {
     let app = app.plugin(tauri_plugin_notification::init());
     macro_rules! handler {
         ($($m:ident)::+) => {
-            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings, page_state, focus_status, snooze, save_profile, delete_profile, apply_profile, set_sound, photo, photo_exit]
+            $($m)::+![get_settings, set_settings, tray_title, hide_widget, open_settings, quit, notify, notify_permission, request_notify_permission, open_notify_settings, page_state, focus_status, snooze, save_profile, delete_profile, apply_profile, set_sound, photo, photo_exit, glance, preview_frame, tray_action, hide_popover, intro_done]
         };
     }
     #[cfg(not(feature = "rust-core"))]
@@ -679,12 +766,14 @@ fn main() {
     #[cfg(feature = "rust-core")]
     let app = app.invoke_handler(handler!(planet_commands));
     // every move of the widget wakes the snap watcher, which acts once the drag is over
-    let app = app.on_window_event(|w, e| {
-        if let (tauri::WindowEvent::Moved(_), "main") = (e, w.label()) {
+    let app = app.on_window_event(|w, e| match (e, w.label()) {
+        (tauri::WindowEvent::Moved(_), "main") => {
             if let Some(m) = w.app_handle().try_state::<std::sync::Arc<place::Mover>>() {
                 m.moved();
             }
         }
+        (tauri::WindowEvent::Focused(false), popover::LABEL) => popover::blurred(w.app_handle()),
+        _ => {}
     });
     app.setup(|app| {
             #[cfg(target_os = "macos")]
@@ -697,6 +786,7 @@ fn main() {
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
             app.manage(system::Sys::default());
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default(), tray_profiles: Mutex::new(None) });
+            popover::init(app.handle());
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
             watch_snooze(app.handle().clone());
@@ -756,6 +846,8 @@ fn main() {
             if let Some(src) = saved.as_ref().and_then(native::wanted) {
                 native::start(app.handle(), src, fps)?;
             }
+            #[cfg(debug_assertions)]
+            debug_open(app.handle());
             if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
                 let app = app.handle().clone();
                 std::thread::spawn(move || {
@@ -906,59 +998,25 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip(name)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            let app = app.clone();
-            let id = event.id().as_ref().to_string();
-            match id.as_str() {
-                "show" => {
-                    let visible = app.get_webview_window("main").map(|w| w.is_visible().unwrap_or(true)).unwrap_or(true);
-                    show_widget(&app, !visible);
-                }
-                "settings" => {
-                    tauri::async_runtime::spawn(async move {
-                        let _ = open_settings(app).await;
-                    });
-                }
-                "quit" => quit(app),
-                // both wait on the network: off the main thread
-                "check_update" => drop(std::thread::spawn(move || update::check_now(&app, true))),
-                "update" => drop(std::thread::spawn(move || update::install_now(&app))),
-                "screensaver" => match screensaver::install(&app) {
-                    Ok(next) => notify(app, "screensaver installed".into(), next.into()),
-                    Err(e) => notify(app, "couldn't install the screensaver".into(), e),
-                },
-                "top" => {
-                    let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
-                    let _ = set_settings(app, json!({ "on_top": on }));
-                }
-                "ghost" => {
-                    let on = !app.state::<State>().settings.lock().unwrap()["ghost"].as_bool().unwrap_or(false);
-                    let _ = set_settings(app, json!({ "ghost": on }));
-                }
-                "login" => {
-                    let on = !app.autolaunch().is_enabled().unwrap_or(false);
-                    let _ = set_settings(app, json!({ "login": on }));
-                }
-                "photo" => photo(app),
-                id => {
-                    if let Some(size) = id.strip_prefix("size:") {
-                        let _ = set_settings(app, json!({ "size": size }));
-                    } else if let Some(choice) = id.strip_prefix("snooze:") {
-                        let _ = snooze(app, choice.into());
-                    } else if let Some(k) = id.strip_prefix("profile:").and_then(|k| k.parse::<usize>().ok()) {
-                        let s = app.state::<State>().settings.lock().unwrap().clone();
-                        if let Some(name) = prefs::names(&s).get(k).cloned() {
-                            let _ = apply_profile(app.clone(), name);
-                        }
-                        // a check item toggles itself on a click: put the checks back as the settings say
-                        let s = app.state::<State>().settings.lock().unwrap().clone();
-                        let tray = app.state::<State>().tray.lock().unwrap().clone();
-                        if let Some(t) = tray {
-                            tray_profiles(&app, &t, &s);
-                        }
-                    }
-                }
+        .on_menu_event(|app, event| menu_action(app.clone(), event.id().as_ref()))
+        .on_tray_icon_event(|tray, e| {
+            let app = tray.app_handle();
+            let TrayIconEvent::Click { button: MouseButton::Left, button_state, rect, .. } = e else { return };
+            if !prefs::popover(&app.state::<State>().settings.lock().unwrap()["tray_style"]) {
+                return;
             }
+            // as each one's menus do: macOS opens on the press, Windows on the release
+            if (button_state == MouseButtonState::Down) != cfg!(target_os = "macos") {
+                return;
+            }
+            let icon = popover::icon_rect(&rect);
+            #[cfg(target_os = "macos")]
+            if popover::control_held() {
+                popover::hide(app);
+                tray_menu_at(app, icon);
+                return;
+            }
+            popover::toggle(app, icon);
         })
         .build(app)?;
     menu.insert(&ghost, 4)?; // after always on top
@@ -979,6 +1037,101 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     };
     *app.state::<State>().tray.lock().unwrap() = Some(tray);
     Ok(())
+}
+
+// the native menu, under the icon, for a ⌃-click while the icon opens the popover (macOS has no right-click on some
+// trackpads): popped up from the hidden popover window, put where the menu should open
+#[cfg(target_os = "macos")]
+fn tray_menu_at(app: &AppHandle, icon: popover::R) {
+    let menu = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.menu.clone());
+    let (Some(menu), Some(w)) = (menu, popover::anchor_for_menu(app, icon)) else { return };
+    let _ = w.popup_menu_at(&menu, tauri::LogicalPosition::new(0.0, 0.0));
+}
+
+// The tray menu's items, by id; the popover's items call the same
+fn menu_action(app: AppHandle, id: &str) {
+    match id {
+        "show" => {
+            let visible = app.get_webview_window("main").map(|w| w.is_visible().unwrap_or(true)).unwrap_or(true);
+            show_widget(&app, !visible);
+        }
+        "settings" => {
+            tauri::async_runtime::spawn(async move {
+                let _ = open_settings(app).await;
+            });
+        }
+        "quit" => quit(app),
+        // both wait on the network: off the main thread
+        "check_update" => drop(std::thread::spawn(move || update::check_now(&app, true))),
+        "update" => drop(std::thread::spawn(move || update::install_now(&app))),
+        "screensaver" => match screensaver::install(&app) {
+            Ok(next) => notify(app, "screensaver installed".into(), next.into()),
+            Err(e) => notify(app, "couldn't install the screensaver".into(), e),
+        },
+        "top" => {
+            let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
+            let _ = set_settings(app, json!({ "on_top": on }));
+        }
+        "ghost" => {
+            let on = !app.state::<State>().settings.lock().unwrap()["ghost"].as_bool().unwrap_or(false);
+            let _ = set_settings(app, json!({ "ghost": on }));
+        }
+        "login" => {
+            let on = !app.autolaunch().is_enabled().unwrap_or(false);
+            let _ = set_settings(app, json!({ "login": on }));
+        }
+        "photo" => photo(app),
+        id => {
+            if let Some(size) = id.strip_prefix("size:") {
+                let _ = set_settings(app, json!({ "size": size }));
+            } else if let Some(choice) = id.strip_prefix("snooze:") {
+                let _ = snooze(app, choice.into());
+            } else if let Some(k) = id.strip_prefix("profile:").and_then(|k| k.parse::<usize>().ok()) {
+                let s = app.state::<State>().settings.lock().unwrap().clone();
+                if let Some(name) = prefs::names(&s).get(k).cloned() {
+                    let _ = apply_profile(app.clone(), name);
+                }
+                // a check item toggles itself on a click: put the checks back as the settings say
+                let s = app.state::<State>().settings.lock().unwrap().clone();
+                let tray = app.state::<State>().tray.lock().unwrap().clone();
+                if let Some(t) = tray {
+                    tray_profiles(&app, &t, &s);
+                }
+            }
+        }
+    }
+}
+
+// Debug builds only: IDLE_FIGHTERZ_DEBUG_OPEN=popover, menu (the ⌃-click menu) or settings opens it 3 s after launch,
+// for testing where no one can click the tray icon (a menu bar that hides it). The popover goes under the icon, or
+// under the menu bar's right end if the icon isn't shown
+#[cfg(debug_assertions)]
+fn debug_open(app: &AppHandle) {
+    let Ok(what) = std::env::var("IDLE_FIGHTERZ_DEBUG_OPEN") else { return };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+        let h = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let icon = h.tray_by_id("tray").and_then(|t| t.rect().ok().flatten()).map(|r| popover::icon_rect(&r)).filter(|r| r.w > 0.0).unwrap_or_else(|| {
+                let m = h.primary_monitor().ok().flatten();
+                let (w, s) = m.as_ref().map_or((1440.0, 1.0), |m| (m.size().width as f64, m.scale_factor()));
+                popover::R { x: w - 260.0 * s, y: 0.0, w: 30.0 * s, h: 24.0 * s }
+            });
+            eprintln!("debug: opening {what} at {icon:?}");
+            match what.as_str() {
+                "popover" => popover::show(&h, icon),
+                #[cfg(target_os = "macos")]
+                "menu" => tray_menu_at(&h, icon),
+                _ => {
+                    let h = h.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = open_settings(h).await;
+                    });
+                }
+            }
+        });
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1166,12 +1319,57 @@ mod tests {
         assert_eq!((s["size"].clone(), s["sound"].clone(), s["profiles"].clone()), (json!(452), json!(true), profiles));
     }
 
+    // a first launch has no file: the first-run card is due, and the windows are today's. Any file from before (0.2.x)
+    // has met the widget: no card. A file that asked for the intro again keeps asking
+    #[test]
+    fn a_first_launch_gets_the_card_and_an_upgrade_does_not() {
+        let fresh = super::initial_settings(None);
+        assert_eq!((fresh["onboarded"].clone(), fresh["settings_style"].clone(), fresh["tray_style"].clone()), (json!(false), json!("compact"), json!("menu")));
+        let upgraded = super::initial_settings(Some(&json!({ "size": 400, "ghost": false, "profiles": [] })));
+        assert_eq!((upgraded["onboarded"].clone(), upgraded["settings_style"].clone(), upgraded["tray_style"].clone()), (json!(true), json!("compact"), json!("menu")));
+        assert_eq!(super::initial_settings(Some(&json!({ "onboarded": false })))["onboarded"], json!(false));
+        let picked = super::initial_settings(Some(&json!({ "settings_style": "full", "tray_style": "popover", "onboarded": true })));
+        assert_eq!((picked["settings_style"].clone(), picked["tray_style"].clone()), (json!("full"), json!("popover")));
+        assert_eq!(super::initial_settings(Some(&json!({ "settings_style": 3 })))["settings_style"], json!("compact"), "not a string: ignored");
+    }
+
+    // the settings each window has a row for (data-s), as a set
+    fn rows(page: &str) -> std::collections::BTreeSet<String> {
+        page.split("data-s=\"").skip(1).filter_map(|r| r.split('"').next()).filter(|k| !k.contains('$')).map(String::from).collect()
+    }
+
+    // every setting the app keeps has a row in both settings windows, and neither window has a row the other lacks. A
+    // row for a key the app doesn't keep yet (skin and theme until feat/hud-skins lands: the full window shows them only
+    // once the settings have them) is the one exception, and only in the full window
+    #[test]
+    fn both_settings_windows_have_every_setting() {
+        let (compact, full) = (rows(include_str!("../../settings.html")), rows(include_str!("../../settings-full.html")));
+        let row = |k: &str| match k {
+            "profiles" => "profile",
+            "snooze_until" => "snooze",
+            "onboarded" => "intro",
+            k => k,
+        }
+        .to_string();
+        let kept: std::collections::BTreeSet<String> = serde_json::from_str::<serde_json::Value>(super::DEFAULTS).unwrap().as_object().unwrap().keys().map(|k| row(k)).collect();
+        for k in &kept {
+            assert!(compact.contains(k), "the compact settings have no row for {k}");
+            assert!(full.contains(k), "the full settings have no row for {k}");
+        }
+        assert_eq!(compact.difference(&full).collect::<Vec<_>>(), Vec::<&String>::new(), "only in the compact settings");
+        let pending = ["skin", "theme"];
+        for k in full.difference(&compact) {
+            assert!(pending.contains(&k.as_str()) && !kept.contains(k), "only in the full settings: {k}");
+        }
+        assert!(compact.contains("login") && full.contains("login") && full.contains("permission"));
+    }
+
     // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
     #[test]
     fn each_window_may_call_only_its_own_commands() {
         let app = mock_builder().invoke_handler(tauri::generate_handler![]).build(tauri::generate_context!(test = true)).unwrap();
         let open = |label: &str| WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into())).build().unwrap();
-        let (main, settings) = (open("main"), open("settings"));
+        let (main, settings, popover) = (open("main"), open("settings"), open("popover"));
         let call = |w: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str| {
             let req = InvokeRequest {
                 cmd: cmd.into(),
@@ -1184,17 +1382,23 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
-        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save"] {
+        for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save", "glance", "preview_frame", "tray_action", "hide_popover"] {
             assert!(!call(&main, cmd), "main may not call {cmd}");
         }
-        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings", "focus_status", "snooze", "save_profile", "delete_profile", "apply_profile"] {
+        for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings", "focus_status", "snooze", "save_profile", "delete_profile", "apply_profile", "glance", "preview_frame"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_fps", "planet_view", "planet_pixels", "planet_mask", "tray_action", "hide_popover"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
+        }
+        for cmd in ["get_settings", "set_settings", "glance", "tray_action", "hide_popover"] {
+            assert!(call(&popover, cmd), "the popover may call {cmd}");
+        }
+        for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "planet_start", "planet_buy", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
+            assert!(!call(&popover, cmd), "the popover may not call {cmd}");
         }
     }
 }

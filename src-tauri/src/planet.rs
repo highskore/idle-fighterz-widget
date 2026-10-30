@@ -360,6 +360,18 @@ impl Core {
         .ok()
     }
 
+    /// The game at a glance, for the menu-bar popover and the settings preview: the HUD as `ui.update` gets it, with
+    /// how many upgrades are affordable and the world's name.
+    pub fn glance(&self) -> Option<String> {
+        self.with(|b| {
+            let ready = b.game.shop().iter().filter(|r| r.can).count();
+            let world = planet_core::hud::WORLD_FULL.get(b.game.hud.world as usize).copied().unwrap_or("");
+            let hud = b.game.hud.to_json();
+            format!("{{\"hud\":{hud},\"ready\":{ready},\"world\":{}}}", serde_json::Value::from(world))
+        })
+        .ok()
+    }
+
     pub fn can_ascend(&self) -> bool {
         self.with(|b| can_ascend(&b.game)).unwrap_or(false)
     }
