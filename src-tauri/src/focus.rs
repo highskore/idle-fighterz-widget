@@ -145,7 +145,8 @@ mod os {
                 &("org.freedesktop.Notifications", "Inhibited"),
             )
             .ok()?;
-        as_bool(&reply.body().deserialize::<OwnedValue>().ok()?)
+        let inhibited: OwnedValue = reply.body().deserialize().ok()?;
+        as_bool(&inhibited)
     }
 }
 
