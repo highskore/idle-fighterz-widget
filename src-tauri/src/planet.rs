@@ -48,6 +48,8 @@ pub struct Core {
     /// locked after `bridge` whenever both are
     paint: Mutex<Paint>,
     surface: OnceLock<Box<dyn Surface>>,
+    /// the screensavers mirroring the run (saver/README.md)
+    saver: OnceLock<saver_link::Hub>,
 }
 
 /// What a hidden catch-up leaves for the app: the power level, and the notifications the page would have sent.
@@ -174,7 +176,55 @@ impl Core {
         if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
-        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new() }
+        Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new(), saver: OnceLock::new() }
+    }
+
+    /// Frames go to the screensavers `hub` serves while any is watching.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    pub fn set_saver(&self, hub: saver_link::Hub) {
+        let _ = self.saver.set(hub);
+    }
+
+    /// Whether a screensaver is watching: then the game is drawn and plays even while hidden.
+    fn watched(&self) -> bool {
+        self.saver.get().is_some_and(|h| h.attached())
+    }
+
+    // the frame just drawn, to the screensavers
+    fn publish(&self, b: &Bridge, p: &Paint) {
+        if let Some(h) = self.saver.get().filter(|h| h.attached()) {
+            let (w, ht) = p.painter.size();
+            h.publish(p.painter.rgba(), w as usize, ht as usize, &short(b.game.hud.pl));
+        }
+    }
+
+    /// Hidden with a screensaver watching: plays `elapsed` (a long gap undrawn, then one drawn step, as `tick` does at
+    /// the game's 30 steps a second), sends the frame to the screensaver, and takes what `catch_up` takes.
+    pub fn saver_tick(&self, mut elapsed: f64, now_ms: f64, kept: &mut Vec<Cue>, ascend: &mut bool) -> Option<Caught> {
+        self.with(|b| {
+            let mut p = self.paint();
+            if !p.on && p.painter.size() == (1, 1) {
+                // the page never said its size: the game's own
+                p.painter.resize(SIZE.0, SIZE.1, SIZE.2);
+            }
+            while elapsed > 2.0 * DT {
+                let piece = (elapsed - DT).min(PIECE);
+                b.step(piece, now_ms);
+                elapsed -= piece;
+            }
+            if p.step(b, elapsed, now_ms) {
+                self.publish(b, &p);
+            }
+            drop(p);
+            drain(b, kept, ascend)
+        })
+        .ok()
+    }
+
+    /// The wait until the next step is due while drawing for a screensaver (`run`'s drawn wait).
+    fn saver_wait(&self) -> Duration {
+        let bank = self.paint().bank;
+        Duration::from_secs_f64((DT - bank + DT / 2.0).clamp(0.0, 1.0))
     }
 
     /// Frames go to `s` while it takes them (see `Surface::place`).
@@ -212,6 +262,7 @@ impl Core {
                 if !p.on {
                     b.step(elapsed, now_ms);
                 } else if p.step(b, elapsed, now_ms) {
+                    self.publish(b, &p);
                     match self.surface.get().filter(|_| p.native) {
                         Some(s) => {
                             let (w, h) = p.painter.size();
@@ -242,22 +293,7 @@ impl Core {
                 b.step(piece, now_ms);
                 elapsed -= piece;
             }
-            b.game.events.clear();
-            let mut notes = Vec::new();
-            for c in b.game.cues.drain(..) {
-                match c {
-                    Cue::Notify(kind, arg) => notes.push((kind, arg)),
-                    Cue::WishDone | Cue::Achieved | Cue::Zeno | Cue::TreeGift(_) if !kept.contains(&c) => kept.push(c),
-                    _ => {}
-                }
-            }
-            // widget.js's ui.shop: ascend notifies when it opens
-            let can = can_ascend(&b.game);
-            if can && !*ascend {
-                notes.push(("ascend", String::new()));
-            }
-            *ascend = can;
-            Caught { pl: b.game.hud.pl, notes }
+            drain(b, kept, ascend)
         })
         .ok()
     }
@@ -336,6 +372,27 @@ fn loadable(s: &str) -> bool {
         }
     }
     s.len() <= MAX_SAVE
+}
+
+// what a hidden step leaves: toasts and sounds go; notifications come back; the cues that leave something on the page stay
+// in `kept` for when it shows
+fn drain(b: &mut Bridge, kept: &mut Vec<Cue>, ascend: &mut bool) -> Caught {
+    b.game.events.clear();
+    let mut notes = Vec::new();
+    for c in b.game.cues.drain(..) {
+        match c {
+            Cue::Notify(kind, arg) => notes.push((kind, arg)),
+            Cue::WishDone | Cue::Achieved | Cue::Zeno | Cue::TreeGift(_) if !kept.contains(&c) => kept.push(c),
+            _ => {}
+        }
+    }
+    // widget.js's ui.shop: ascend notifies when it opens
+    let can = can_ascend(&b.game);
+    if can && !*ascend {
+        notes.push(("ascend", String::new()));
+    }
+    *ascend = can;
+    Caught { pl: b.game.hud.pl, notes }
 }
 
 fn can_ascend(g: &Game) -> bool {
@@ -423,18 +480,24 @@ pub fn run(app: AppHandle, hooks: Hooks) {
                 continue;
             }
             let mut ascend = core.can_ascend();
+            let mut told = Instant::now();
             loop {
                 if core.stopped() {
                     return;
                 }
-                let plays = (hooks.plays_hidden)(&app);
-                shown.nap(plays.then_some(HIDDEN_TICK));
+                // a screensaver watching: drawn, 30 steps a second, until it goes (its hub pokes `shown` either way)
+                let watched = core.watched();
+                let plays = watched || (hooks.plays_hidden)(&app);
+                shown.nap(if watched { Some(core.saver_wait()) } else { plays.then_some(HIDDEN_TICK) });
                 let now = Instant::now();
                 let elapsed = (now - last).as_secs_f64().min(MAX_CATCH_UP);
                 last = now;
                 // paused, the time hidden isn't played (game.js: no steps while hidden)
                 if plays {
-                    if let Some(c) = core.catch_up(elapsed, now_ms(), &mut kept, &mut ascend) {
+                    let caught = if watched { core.saver_tick(elapsed, now_ms(), &mut kept, &mut ascend) } else { core.catch_up(elapsed, now_ms(), &mut kept, &mut ascend) };
+                    // the menu bar and notifications as often as a hidden catch-up has them, or a notification sooner
+                    if let Some(c) = caught.filter(|c| !watched || !c.notes.is_empty() || told.elapsed() >= HIDDEN_TICK) {
+                        told = Instant::now();
                         if !shown.get() {
                             (hooks.hidden)(&app, c);
                         }
@@ -862,6 +925,45 @@ mod tests {
                 (save, c.with(|b| (b.game.hud.clone(), b.game.shop_json(), b.game.s.pl)).unwrap())
             };
             assert_eq!(state(&hidden), state(&shown), "batches {batches:?}");
+        }
+    }
+
+    // hidden, with a screensaver connected, each tick draws and sends it the frame; with none, nothing is drawn
+    #[test]
+    fn a_screensaver_gets_the_hidden_game_drawn() {
+        #[cfg(windows)]
+        let at = saver_link::Addr::Pipe(format!(r"\\.\pipe\idle-fighterz-planet-test-{}", std::process::id()));
+        #[cfg(not(windows))]
+        let at = saver_link::Addr::Tcp(vec![std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()]);
+        let ep = saver_link::Endpoint { at, key: std::env::temp_dir().join(format!("idle-fighterz-test-{}-saver-key", std::process::id())).join("key") };
+        let core = Core::new(SEED, file("saver"));
+        core.set_saver(saver_link::Hub::start_on(&ep, || {}).unwrap());
+        let (mut kept, mut ascend) = (Vec::new(), false);
+        core.with(|b| b.start("Wed Oct 28 2026", 1.7e12)).unwrap();
+        assert!(!core.watched());
+        core.saver_tick(DT, 1.7e12, &mut kept, &mut ascend);
+        assert_eq!(core.paint().painter.size(), (SIZE.0 as u32, SIZE.1 as u32), "drawn at the game's size: the page never said its own");
+        let mut c = saver_link::connect(&ep).unwrap();
+        let t = Instant::now();
+        while !core.watched() {
+            assert!(t.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // a long gap is played undrawn, then one step drawn and sent
+        let t0 = core.with(|b| b.t).unwrap();
+        core.saver_tick(2.0, 1.7e12 + 2000.0, &mut kept, &mut ascend);
+        assert!((core.with(|b| b.t).unwrap() - t0 - 2.0).abs() < 2.0 * DT);
+        let f = saver_link::read_frame(&mut c).unwrap();
+        assert_eq!((f.w, f.h), (SIZE.0 as usize, SIZE.1 as usize));
+        assert_eq!(f.rgba, core.paint().painter.rgba());
+        assert!(f.rgba.chunks(4).any(|p| p[3] != 0), "the frame has the planet in it");
+        assert_eq!(f.power, short(core.with(|b| b.game.hud.pl).unwrap()));
+        drop(c);
+        let t = Instant::now();
+        while core.watched() {
+            assert!(t.elapsed() < Duration::from_secs(5), "the screensaver went, the hub should hear it");
+            core.saver_tick(DT, 1.7e12, &mut kept, &mut ascend);
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
