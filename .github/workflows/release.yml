@@ -77,6 +77,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run -s page
+          npm test
 
       # what ships (the default features), and the other builds still in the code: 0.1's web-view game (none), the
       # canvas path alone (rust-core) and the stand-in sources (native-renderer). A tag's commit has been through this
