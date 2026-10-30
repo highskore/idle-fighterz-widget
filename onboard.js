@@ -5,14 +5,16 @@
 (function (root) {
   // The ring round the planet, in CSS pixels: `spot` is where the core draws it (centre and radius in buffer pixels, and
   // the buffer's size: planet_spot, the camera its hit tests use too), `rect` the canvas it's drawn on (or the layer
-  // under it, placed on the same rect). A little clear of the disc, so trees and huts sit inside
+  // under it, placed on the same rect). `r` is the drawn disc's, outline included; the ring the same few points clear of it
+  const GAP = 9;
   function ring(spot, rect) {
-    const kx = rect.width / spot.w, ky = rect.height / spot.h, r = spot.r * (kx + ky) / 2;
-    return { x: rect.left + spot.cx * kx, y: rect.top + spot.cy * ky, r, ring: r + Math.max(6, r * .14) };
+    // the disc is drawn with a one-pixel outline round its radius: the margin is measured from that, at 1× and 2× alike
+    const kx = rect.width / spot.w, ky = rect.height / spot.h, r = (spot.r + 1) * (kx + ky) / 2;
+    return { x: rect.left + spot.cx * kx, y: rect.top + spot.cy * ky, r, ring: r + GAP };
   }
   // game.js in the page (no core to ask): its camera for the widget, as geom.rs's layout() puts it
   const guess = cv => ({ w: cv.width, h: cv.height, cx: Math.round(cv.width / 2), cy: Math.round(cv.height / 2), r: Math.max(56, Math.min(70, Math.round(Math.min(cv.width, cv.height) * .2))) });
-  if (typeof module === 'object' && module.exports) module.exports = { ring, guess };
+  if (typeof module === 'object' && module.exports) module.exports = { ring, guess, GAP };
   const tauri = root.__TAURI__;
   if (!tauri) return;
   const css = document.createElement('style');
@@ -28,12 +30,16 @@ html.ob-on .w, html.ob-on .w-ring { visibility: hidden !important; }
 .ob-act button { font: inherit; font-size: 11px; text-transform: lowercase; border: 0; border-radius: 999px; padding: 5px 13px; cursor: pointer; }
 .ob-act .skip { padding-left: 0; color: #8d8d8d; background: none; }
 .ob-act .next { color: #fff; background: #0b0b0b; }
-.ob-ring { position: fixed; z-index: 49; width: 176px; height: 176px; margin: -88px 0 0 -88px; border-radius: 50%; border: 2px dashed #d99a1c; box-shadow: 0 0 0 4px rgba(255,255,255,.55), inset 0 0 0 4px rgba(255,255,255,.55); pointer-events: none; animation: obp 1.6s ease-in-out infinite; }
+.ob-ring { position: fixed; z-index: 49; width: 176px; height: 176px; margin: -88px 0 0 -88px; border-radius: 50%; border: 2px dashed #d99a1c; box-shadow: 0 0 0 4px rgba(255,255,255,.55), inset 0 0 0 4px rgba(255,255,255,.55); pointer-events: none; }
 .ob-tag { position: fixed; z-index: 49; transform: translateX(-50%); padding: 1px 8px; font: 11px/1.5 var(--mono, ui-monospace, monospace); color: #0b0b0b; background: rgba(255,255,255,.95); border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,.25); pointer-events: none; white-space: nowrap; }
-@keyframes obp { 50% { transform: scale(1.05); } }
-@media (prefers-reduced-motion: reduce) { .ob-ring { animation: none; } }
-@media (max-height: 380px) { .ob { padding: 8px 11px 7px; } .ob h3 { margin: 3px 0 2px; font-size: 17px; } .ob p { font-size: 10px; line-height: 1.35; } .ob-act { margin-top: 5px; } .ob-act button { padding: 3px 11px; } }
-.ob-tap { position: fixed; z-index: 49; width: 30px; height: 30px; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); }
+@keyframes obp { 50% { transform: translate(-3px, -4px); } }
+.ob-ring { box-sizing: border-box; }
+.ob.ob-up { top: 8px; bottom: auto; }
+@media (prefers-reduced-motion: reduce) { .ob-tap { animation: none; } }
+.ob-act .ob-dots { display: none; }
+/* a small widget: a shorter card, its step dots between the buttons, so the planet above stays in sight */
+@media (max-height: 380px) { .ob { padding: 7px 11px 6px; } .ob-top { display: none; } .ob-act .ob-dots { display: flex; } .ob h3 { margin: 0 0 2px; font-size: 16px; } .ob p { font-size: 10px; line-height: 1.3; } .ob-act { margin-top: 4px; } .ob-act button { padding: 2px 11px; } }
+.ob-tap { position: fixed; z-index: 49; width: 30px; height: 30px; pointer-events: none; animation: obp 1.2s ease-in-out infinite; filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); }
 .ob-win { position: fixed; inset: 4px; z-index: 49; border: 2px dashed rgba(217,154,28,.95); border-radius: 14px; box-shadow: 0 0 0 2px rgba(255,255,255,.6), inset 0 0 0 2px rgba(255,255,255,.6); pointer-events: none; }
 .ob-arrow { position: fixed; z-index: 49; width: 26px; height: 26px; display: grid; place-items: center; font: 14px/1 system-ui, sans-serif; color: #0b0b0b; background: rgba(255,255,255,.95); border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,.3); pointer-events: none; }`;
   document.head.append(css);
@@ -63,7 +69,7 @@ html.ob-on .w, html.ob-on .w-ring { visibility: hidden !important; }
     clear(); step = n;
     document.documentElement.classList.add('ob-on');
     const [h, p] = STEPS()[n - 1];
-    const card = add(el(`<div class="ob" role="dialog" aria-label="welcome"><div class="ob-top"><span>welcome · ${n} of 3</span><span class="ob-dots">${[1, 2, 3].map(k => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span></div><h3>${h}</h3><p>${p}</p><div class="ob-act"><button type="button" class="skip">skip</button><button type="button" class="next">${n < 3 ? 'next' : 'start playing'}</button></div></div>`));
+    const card = add(el(`<div class="ob" role="dialog" aria-label="welcome"><div class="ob-top"><span>welcome · ${n} of 3</span><span class="ob-dots">${[1, 2, 3].map(k => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span></div><h3>${h}</h3><p>${p}</p><div class="ob-act"><button type="button" class="skip">skip</button><span class="ob-dots">${[1, 2, 3].map(k => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span><button type="button" class="next">${n < 3 ? 'next' : 'start playing'}</button></div></div>`));
     card.querySelector('.skip').addEventListener('click', done);
     card.querySelector('.next').addEventListener('click', () => (n < 3 ? show(n + 1) : done()));
     if (n === 1) {
@@ -87,7 +93,10 @@ html.ob-on .w, html.ob-on .w-ring { visibility: hidden !important; }
       const p = ring(spot, cv.getBoundingClientRect()), d = 2 * p.ring;
       Object.assign(e.style, { left: p.x + 'px', top: p.y + 'px', width: d + 'px', height: d + 'px', margin: `${-p.ring}px 0 0 ${-p.ring}px` });
       Object.assign(hand.style, { left: p.x + p.r * .45 + 'px', top: p.y + p.r * .4 + 'px' });
-      Object.assign(tag.style, { left: p.x + 'px', top: Math.max(4, p.y - p.ring - 26) + 'px' });
+      // the card goes on the side of the planet with more room (above it when a top strip pushes the planet down)
+      const up = p.y - p.ring > innerHeight - p.y - p.ring + 10, card = document.querySelector('.ob');
+      if (card) card.classList.toggle('ob-up', up);
+      Object.assign(tag.style, { left: p.x + 'px', top: (up ? Math.min(innerHeight - 30, p.y + p.ring + 6) : Math.max(4, p.y - p.ring - 26)) + 'px' });
     });
   }
   function done() {
