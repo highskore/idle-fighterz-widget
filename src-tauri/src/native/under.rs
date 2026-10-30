@@ -271,6 +271,13 @@ impl crate::planet::Surface for Under {
         self.on_main(move |l| {
             quietly(|| {
                 if on {
+                    // the page's y runs down from the top. AppKit gives a layer-hosting view's root layer the view's own
+                    // geometry (not flipped) whatever it was set to, so measured from the bottom it's the page's y
+                    // flipped: otherwise the frames sit lower than the canvas by the band the canvas leaves under it
+                    let flip = l.superlayer().filter(|p| !p.isGeometryFlipped()).map(|p| p.bounds().size.height);
+                    #[cfg(debug_assertions)]
+                    eprintln!("layer: page rect {x},{y} {w}x{h}, root flipped: {}", flip.is_none());
+                    let y = flip.map_or(y, |hh| hh - y - h);
                     l.setFrame(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
                     l.setOpacity(opacity.clamp(0.0, 1.0) as f32);
                 } else {
