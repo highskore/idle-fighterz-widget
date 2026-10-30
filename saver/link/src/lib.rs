@@ -6,8 +6,12 @@
 //! - the handshake. Screensaver: hello (`"IFZS"`, version `u16`, flags `u16` (0), user `u32`: the uid on macOS, 0 on
 //!   Windows) and a 16-byte nonce. Widget: its hello, its nonce, and HMAC-SHA256(key, "IFZS widget" ‖ both nonces).
 //!   Screensaver: HMAC-SHA256(key, "IFZS saver" ‖ both nonces). The key is 32 random bytes the widget writes at launch
-//!   where only the user can read them (`endpoint`); either side drops a peer that can't prove it, within 2 s
-//! - then server to screensaver only, messages: kind `u8`, payload length `u32`, payload. Kind 1 is a frame: width
+//!   where only the user can read them (`endpoint`); either side drops a peer that can't prove it, within 2 s. Both
+//!   proofs also cover the port the screensaver dialled (0 for the pipe), so a relay on another port fails
+//! - then server to screensaver only, messages, each followed by a 32-byte tag: HMAC-SHA256 under the session key
+//!   (HMAC(key, "IFZS session" ‖ nonces ‖ port)) over the message's sequence number (`u64`, from 0) and its bytes. A bad
+//!   tag (changed, replayed, reordered or injected) ends the connection
+//! - a message: kind `u8`, payload length `u32`, payload. Kind 1 is a frame: width
 //!   `u16`, height `u16`, encoding `u8`, power length `u8`, the power level (UTF-8), then the pixels: RGBA8 rows top to
 //!   bottom (encoding 0), or runs of `count u16` + one RGBA8 pixel (encoding 1). Other kinds are skipped.
 
@@ -289,24 +293,29 @@ const SHAKE: Duration = Duration::from_secs(2);
 
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
-fn mac(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8]) -> HmacSha256 {
+fn mac(key: &[u8; KEY_LEN], parts: &[&[u8]]) -> HmacSha256 {
     use hmac::Mac;
     let mut m = HmacSha256::new_from_slice(key).expect("any key length");
-    m.update(role);
-    m.update(nc);
-    m.update(ns);
+    for p in parts {
+        m.update(p);
+    }
     m
 }
 
-fn tag(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8]) -> [u8; MAC] {
+fn tag(key: &[u8; KEY_LEN], parts: &[&[u8]]) -> [u8; MAC] {
     use hmac::Mac;
-    mac(key, role, nc, ns).finalize().into_bytes().into()
+    mac(key, parts).finalize().into_bytes().into()
 }
 
 // constant time
-fn check(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8], got: &[u8]) -> Result<(), Error> {
+fn check(key: &[u8; KEY_LEN], parts: &[&[u8]], got: &[u8]) -> Result<(), Error> {
     use hmac::Mac;
-    mac(key, role, nc, ns).verify_slice(got).map_err(|_| Error::Auth)
+    mac(key, parts).verify_slice(got).map_err(|_| Error::Auth)
+}
+
+// a message's tag: the session key over its sequence number and its bytes (kind, length, payload)
+fn frame_tag(session: &[u8; KEY_LEN], seq: u64, kind: u8, payload: &[u8]) -> HmacSha256 {
+    mac(session, &[&seq.to_le_bytes(), &[kind], &(payload.len() as u32).to_le_bytes(), payload])
 }
 
 fn nonce() -> Result<[u8; NONCE], Error> {
@@ -390,8 +399,22 @@ fn set_timeouts(c: &Conn, read: Duration, write: Duration) {
     let _ = c.set_nodelay(true);
 }
 
-// the screensaver's half of the handshake: our hello and nonce; the widget's hello, nonce and proof; our proof
-fn shake_client(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
+// the port the screensaver dialled, which both proofs and the session key cover: a relay on another port can't pass
+// the widget's proof on (0 for the pipe, which only this user's widget can serve)
+#[cfg(not(windows))]
+fn dialled(c: &Conn, server: bool) -> [u8; 2] {
+    let a = if server { c.local_addr() } else { c.peer_addr() };
+    a.map_or(0, |a| a.port()).to_le_bytes()
+}
+#[cfg(windows)]
+fn dialled(_: &Conn, _: bool) -> [u8; 2] {
+    [0; 2]
+}
+
+// the screensaver's half of the handshake: our hello and nonce; the widget's hello, nonce and proof; our proof. The
+// session key
+fn shake_client(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<[u8; KEY_LEN], Error> {
+    let port = dialled(c, false);
     let nc = nonce()?;
     c.write_all(&[hello(user()).as_slice(), &nc].concat())?;
     let mut h = [0u8; HELLO_LEN];
@@ -402,13 +425,17 @@ fn shake_client(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
     let mut rest = [0u8; NONCE + MAC];
     recv(c, &mut rest, SHAKE)?;
     let (ns, proof) = rest.split_at(NONCE);
-    check(key, b"IFZS widget", &nc, ns, proof)?;
-    c.write_all(&tag(key, b"IFZS saver", &nc, ns))?;
-    Ok(())
+    check(key, &[b"IFZS widget", &nc, ns, &port], proof)?;
+    c.write_all(&tag(key, &[b"IFZS saver", &nc, ns, &port]))?;
+    Ok(tag(key, &[b"IFZS session", &nc, ns, &port]))
 }
 
 // the widget's half
-fn shake_server(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
+fn shake_server(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<[u8; KEY_LEN], Error> {
+    shake_server_on(c, key, dialled(c, true))
+}
+
+fn shake_server_on(c: &mut Conn, key: &[u8; KEY_LEN], port: [u8; 2]) -> Result<[u8; KEY_LEN], Error> {
     let mut first = [0u8; HELLO_LEN + NONCE];
     recv(c, &mut first, SHAKE)?;
     let h: [u8; HELLO_LEN] = first[..HELLO_LEN].try_into().unwrap();
@@ -419,19 +446,45 @@ fn shake_server(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
     }
     let ns = nonce()?;
     // our hello either way, so a screensaver of another version knows to play its own run; a proof only for this user
-    let proof = if theirs == Ok(user()) { tag(key, b"IFZS widget", nc, &ns) } else { [0; MAC] };
+    let proof = if theirs == Ok(user()) { tag(key, &[b"IFZS widget", nc, &ns, &port]) } else { [0; MAC] };
     c.write_all(&[hello(user()).as_slice(), &ns, &proof].concat())?;
     if theirs? != user() {
         return Err(Error::User);
     }
     let mut got = [0u8; MAC];
     recv(c, &mut got, SHAKE)?;
-    check(key, b"IFZS saver", nc, &ns, &got)
+    check(key, &[b"IFZS saver", nc, &ns, &port], &got)?;
+    Ok(tag(key, &[b"IFZS session", nc, &ns, &port]))
+}
+
+/// A screensaver's authenticated connection to the widget: every message carries a tag over its sequence number under
+/// the session key, so a frame changed, replayed, reordered or slipped in by anyone without the key is refused.
+pub struct Session {
+    c: Conn,
+    key: [u8; KEY_LEN],
+    seq: u64,
+}
+
+impl Session {
+    /// The next frame, skipping messages of other kinds (each still checked). `Error::Auth` on a bad tag.
+    pub fn read_frame(&mut self) -> Result<Frame, Error> {
+        use hmac::Mac;
+        loop {
+            let (kind, p) = read_message(&mut self.c)?;
+            let mut t = [0u8; MAC];
+            fill(&mut self.c, &mut t, true, 4)?;
+            frame_tag(&self.key, self.seq, kind, &p).verify_slice(&t).map_err(|_| Error::Auth)?;
+            self.seq += 1;
+            if kind == KIND_FRAME {
+                return decode_frame(&p);
+            }
+        }
+    }
 }
 
 /// Connects as a screensaver: the first address (or the pipe) where the other end proves it holds the key. Frame reads
 /// on the connection time out after a second (TCP), so a reader can look up between frames.
-pub fn connect(ep: &Endpoint) -> Result<Conn, Error> {
+pub fn connect(ep: &Endpoint) -> Result<Session, Error> {
     let key = read_key(&ep.key)?;
     match &ep.at {
         #[cfg(not(windows))]
@@ -440,12 +493,12 @@ pub fn connect(ep: &Endpoint) -> Result<Conn, Error> {
             for a in addrs {
                 let tried = std::net::TcpStream::connect_timeout(a, Duration::from_millis(250)).map_err(Error::from).and_then(|mut c| {
                     set_timeouts(&c, SHAKE, SHAKE);
-                    shake_client(&mut c, &key)?;
+                    let session = shake_client(&mut c, &key)?;
                     let _ = c.set_read_timeout(Some(Duration::from_secs(1)));
-                    Ok(c)
+                    Ok(Session { c, key: session, seq: 0 })
                 });
                 match tried {
-                    Ok(c) => return Ok(c),
+                    Ok(s) => return Ok(s),
                     Err(e) => last = e,
                 }
             }
@@ -458,8 +511,8 @@ pub fn connect(ep: &Endpoint) -> Result<Conn, Error> {
             if !pipe::server_is_us(&c) {
                 return Err(Error::Auth);
             }
-            shake_client(&mut c, &key)?;
-            Ok(c)
+            let session = shake_client(&mut c, &key)?;
+            Ok(Session { c, key: session, seq: 0 })
         }
     }
 }
@@ -736,9 +789,8 @@ fn serve(inner: Arc<Inner>, mut c: Conn, key: [u8; KEY_LEN]) {
     set_timeouts(&c, SHAKE, SHAKE);
     let greet = shake_server(&mut c, &key);
     *inner.pending.lock().unwrap() -= 1;
-    if greet.is_err() {
-        return;
-    }
+    let Ok(session) = greet else { return };
+    let mut seq = 0u64;
     let slot = Arc::new(Slot { next: Mutex::new(None), ready: Condvar::new(), gone: AtomicBool::new(false), writing: AtomicU64::new(0) });
     inner.slots.lock().unwrap().push(slot.clone());
     (inner.changed)();
@@ -750,7 +802,12 @@ fn serve(inner: Arc<Inner>, mut c: Conn, key: [u8; KEY_LEN]) {
         };
         let Some(m) = next else { continue };
         slot.writing.store(inner.ms(), Ordering::Relaxed);
-        if c.write_all(&m).is_err() {
+        let t: [u8; MAC] = {
+            use hmac::Mac;
+            frame_tag(&session, seq, m[0], &m[5..]).finalize().into_bytes().into()
+        };
+        seq += 1;
+        if c.write_all(&m).and_then(|_| c.write_all(&t)).is_err() {
             break;
         }
         slot.writing.store(0, Ordering::Relaxed);

@@ -216,7 +216,7 @@ fn a_screensaver_attaches_gets_frames_and_detaches() {
     assert_eq!(changes.load(Ordering::Relaxed), 1);
     let rgba: Vec<u8> = (0..40 * 30 * 4).map(|i| (i / 64) as u8).collect();
     hub.publish(&rgba, 40, 30, "9.9K");
-    let f = read_frame(&mut c).unwrap();
+    let f = c.read_frame().unwrap();
     assert_eq!((f.w, f.h, f.power.as_str()), (40, 30, "9.9K"));
     assert_eq!(f.rgba, rgba);
     drop(c);
@@ -344,14 +344,101 @@ fn a_genuine_server_sending_an_oversized_frame_is_an_error() {
         std::thread::sleep(Duration::from_secs(1));
     });
     let mut c = connect(&ep).unwrap();
-    assert!(matches!(read_frame(&mut c), Err(Error::TooBig(_))));
+    assert!(matches!(c.read_frame(), Err(Error::TooBig(_))));
 }
 
 #[test]
 fn no_more_than_max_clients_are_served() {
     let ep = test_endpoint();
     let hub = Hub::start_on(&ep, || {}).unwrap();
-    let _held: Vec<Conn> = (0..MAX_CLIENTS).map(|_| connect(&ep).unwrap()).collect();
+    let _held: Vec<Session> = (0..MAX_CLIENTS).map(|_| connect(&ep).unwrap()).collect();
     until("all attached", || hub.inner.slots.lock().unwrap().len() == MAX_CLIENTS);
     assert!(connect(&ep).is_err());
+}
+
+// a widget with the key that misbehaves after a genuine handshake: `send` gets the stream and the session key
+#[cfg(not(windows))]
+fn rogue(port_seen: Option<u16>, send: impl FnOnce(&mut Conn, [u8; KEY_LEN]) + Send + 'static) -> Endpoint {
+    let ep = test_endpoint();
+    let key = new_key(&ep.key).unwrap();
+    let Addr::Tcp(a) = &ep.at;
+    let l = std::net::TcpListener::bind(a[0]).unwrap();
+    std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        let port = port_seen.map_or_else(|| dialled(&c, true), |p| p.to_le_bytes());
+        if let Ok(sk) = shake_server_on(&mut c, &key, port) {
+            send(&mut c, sk);
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    });
+    ep
+}
+
+#[cfg(not(windows))]
+fn tagged(sk: &[u8; KEY_LEN], seq: u64, m: &[u8]) -> Vec<u8> {
+    use hmac::Mac;
+    let t: [u8; MAC] = frame_tag(sk, seq, m[0], &m[5..]).finalize().into_bytes().into();
+    [m, &t].concat()
+}
+
+#[cfg(not(windows))]
+#[test]
+fn frames_are_tagged_in_order() {
+    let a = encode_frame(&[1; 16], 2, 2, "a").unwrap();
+    let b = encode_frame(&[2; 16], 2, 2, "b").unwrap();
+    let mut s = connect(&rogue(None, move |c, sk| {
+        c.write_all(&tagged(&sk, 0, &a)).unwrap();
+        c.write_all(&tagged(&sk, 1, &b)).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(s.read_frame().unwrap().power, "a");
+    assert_eq!(s.read_frame().unwrap().power, "b");
+}
+
+#[cfg(not(windows))]
+type Rogue = Box<dyn Fn(&[u8; KEY_LEN]) -> Vec<u8> + Send>;
+
+#[cfg(not(windows))]
+#[test]
+fn a_tampered_replayed_reordered_or_untagged_frame_is_refused() {
+    let m = encode_frame(&[1; 16], 2, 2, "a").unwrap();
+    let cases: Vec<(&str, Rogue)> = vec![
+        ("tampered", {
+            let m = m.clone();
+            Box::new(move |sk| {
+                let mut t = tagged(sk, 0, &m);
+                t[12] ^= 1;
+                t
+            })
+        }),
+        ("replayed", {
+            let m = m.clone();
+            Box::new(move |sk| [tagged(sk, 0, &m), tagged(sk, 0, &m)].concat())
+        }),
+        ("reordered", {
+            let m = m.clone();
+            Box::new(move |sk| tagged(sk, 1, &m))
+        }),
+        ("another session's key", {
+            let m = m.clone();
+            Box::new(move |_| tagged(&[7; KEY_LEN], 0, &m))
+        }),
+        ("untagged", {
+            let m = m.clone();
+            Box::new(move |_| [m.as_slice(), &[0; MAC]].concat())
+        }),
+    ];
+    for (what, bytes) in cases {
+        let mut s = connect(&rogue(None, move |c, sk| c.write_all(&bytes(&sk)).unwrap())).unwrap();
+        let refused = if what == "replayed" { s.read_frame().is_ok() && s.read_frame() == Err(Error::Auth) } else { s.read_frame() == Err(Error::Auth) };
+        assert!(refused, "{what}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_proof_for_another_port_is_refused() {
+    // as a relay on one port passing on the widget's proof for its own
+    let ep = rogue(Some(1), |_, _| {});
+    assert_eq!(connect(&ep).err(), Some(Error::Auth));
 }

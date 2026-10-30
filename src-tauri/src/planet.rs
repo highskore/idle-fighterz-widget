@@ -954,7 +954,7 @@ mod tests {
         let t0 = core.with(|b| b.t).unwrap();
         core.saver_tick(2.0, 1.7e12 + 2000.0, &mut kept, &mut ascend);
         assert!((core.with(|b| b.t).unwrap() - t0 - 2.0).abs() < 2.0 * DT);
-        let f = saver_link::read_frame(&mut c).unwrap();
+        let f = c.read_frame().unwrap();
         assert_eq!((f.w, f.h), (SIZE.0 as usize, SIZE.1 as usize));
         assert_eq!(f.rgba, core.paint().painter.rgba());
         assert!(f.rgba.chunks(4).any(|p| p[3] != 0), "the frame has the planet in it");

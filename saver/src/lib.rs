@@ -141,7 +141,7 @@ fn follow(s: &Shared, ep: &Endpoint) {
             continue;
         };
         while !s.stop.load(Ordering::Relaxed) && s.watched() {
-            match saver_link::read_frame(&mut c) {
+            match c.read_frame() {
                 Ok(f) => {
                     *s.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
                     *s.got.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
