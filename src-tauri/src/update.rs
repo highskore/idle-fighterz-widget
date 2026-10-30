@@ -529,6 +529,14 @@ pub fn check_now(app: &AppHandle, manual: bool) {
         }
     }
     u.busy.store(false, Ordering::SeqCst);
+    // debug builds on a stand-in release: the tray menu pops up over the widget too, for trying it when the menu-bar
+    // icon is out of sight (behind the notch or a menu-bar manager)
+    #[cfg(debug_assertions)]
+    if std::env::var_os("IDLE_FIGHTERZ_UPDATE_RELEASE").is_some() {
+        if let (Some(t), Some(w)) = (tray_items(app), app.get_webview_window("main")) {
+            let _ = w.popup_menu_at(&t.menu, tauri::LogicalPosition::new(40.0, 40.0));
+        }
+    }
 }
 
 /// the tray's "Update to X.Y.Z": download, verify, install, restart, or the release page where this copy can't update
