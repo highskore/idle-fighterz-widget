@@ -77,6 +77,7 @@ GAMES.push({
       }
       if (m.shop) ui.shop(m.shop);
       for (const [text, ms] of m.events) ui.event(text, ms);
+      if (m.undo) { const id = m.undo.id; if (m.undo.off) ui.eventOff && ui.eventOff(id); else ui.event(m.undo.text, m.undo.ms, { id, label: 'undo', go: () => call('undo', { id }) }); }
       for (const [cue, ...args] of m.cues) if (back[cue]) ui[cue] && ui[cue](args[0], back[cue]); else if (typeof ui[cue] === 'function') ui[cue](...args);
     };
     tauri.event.listen('planet', ({ payload }) => {
@@ -85,7 +86,8 @@ GAMES.push({
       const stale = m.shop || m.cues.length || 'world' in m || (m.hud && performance.now() - fresh >= 1000);
       queue = queue.then(() => (stale ? refresh() : null)).then(() => deliver(m)).catch(e => console.error(e));
     });
-    ui.onBuy(key => call('buy', { key }));
+    // n: how many (shift-click 10, alt-click 0 for max); a plain click is one buy
+    ui.onBuy((key, n = 1) => (n === 1 ? call('buy', { key }) : call('buy_n', { key, n })));
     // the app's own news (an update is out, a photo saved, the away recap), as the game's toasts
     tauri.event.listen('notice', ({ payload }) => ui.event(payload, 8000));
 
@@ -170,6 +172,8 @@ GAMES.push({
       autoNext: () => { call('auto_next'); rerender(); },
       pick: id => { call('pick_hero', { id }); rerender(); return true; },
       thumb,
+      // the shop's hover card and its prices buying ×10 or max, which page.html takes as promises here
+      info: key => call('shop_info', { key }).then(JSON.parse), bulk: n => call('bulk', { n }).then(JSON.parse),
       kaioken: () => call('kaioken'),
       itx: () => call('itx'),
       train: () => call('train'),
