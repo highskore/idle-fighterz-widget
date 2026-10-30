@@ -170,6 +170,7 @@ GAMES.push({
       respec: () => { call('respec'); rerender(); },
       learnAngel: id => { call('learn_angel', { id }); rerender(); },
       autoNext: () => { call('auto_next'); rerender(); },
+      wear: (kind, id) => { call('wear', { kind, id }); rerender(); },
       pick: id => { call('pick_hero', { id }); rerender(); return true; },
       thumb,
       // the shop's hover card and its prices buying ×10 or max, which page.html takes as promises here

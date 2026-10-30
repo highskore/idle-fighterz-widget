@@ -772,6 +772,12 @@ pub fn planet_learn_angel(core: State<'_, Core>, id: String) -> Result<(), Strin
     core.with(|b| b.game.learn_angel(&id))
 }
 
+/// `wear(kind, id)`: wears a look the milestones unlocked, or takes it off.
+#[tauri::command]
+pub fn planet_wear(core: State<'_, Core>, kind: String, id: String) -> Result<(), String> {
+    core.with(|b| b.game.wear(&kind, &id))
+}
+
 #[tauri::command]
 pub fn planet_auto_next(core: State<'_, Core>) -> Result<(), String> {
     core.with(|b| b.game.auto_next())
@@ -835,7 +841,7 @@ macro_rules! planet_commands {
             crate::planet::planet_start, crate::planet::planet_resend, crate::planet::planet_resize, crate::planet::planet_pointer_down, crate::planet::planet_pointer_move,
             crate::planet::planet_pointer_up, crate::planet::planet_pointer_cancel, crate::planet::planet_key, crate::planet::planet_train,
             crate::planet::planet_kaioken, crate::planet::planet_buy, crate::planet::planet_learn, crate::planet::planet_respec, crate::planet::planet_learn_angel,
-            crate::planet::planet_auto_next, crate::planet::planet_pick_wish, crate::planet::planet_pick_hero, crate::planet::planet_menu,
+            crate::planet::planet_auto_next, crate::planet::planet_wear, crate::planet::planet_pick_wish, crate::planet::planet_pick_hero, crate::planet::planet_menu,
             crate::planet::planet_angels, crate::planet::planet_ascend_info, crate::planet::planet_god_info, crate::planet::planet_zeno_info,
             crate::planet::planet_card, crate::planet::planet_fps, crate::planet::planet_view, crate::planet::planet_pixels,
             crate::planet::planet_mask, crate::planet::planet_sprite, crate::planet::planet_itx, crate::planet::planet_itx_jump,
