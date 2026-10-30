@@ -1,0 +1,97 @@
+# The screensaver (saver/): its frame protocol and link tests, the macOS .saver (universal) run in a test host with
+# legacyScreenSaver's sandbox, and the Windows .scr smoke-run full screen. Unsigned builds, kept as artifacts.
+name: screensaver
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+      - name: rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: saver
+      - name: cargo test and clippy
+        working-directory: saver
+        run: |
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: build the .saver (universal)
+        run: |
+          ARCHS="arm64 x86_64" saver/macos/build.sh
+          lipo -info "saver/build/Idle FighterZ.saver/Contents/MacOS/IdleFighterZ"
+          codesign --verify --strict "saver/build/Idle FighterZ.saver"
+      - name: run it in the test host, sandboxed as legacyScreenSaver is
+        run: |
+          SANDBOX=1 saver/macos/try.sh "saver/build/Idle FighterZ.saver" 10 "$RUNNER_TEMP/shots" 2>&1 | tee "$RUNNER_TEMP/try.log"
+          grep -q "playing a demo run" "$RUNNER_TEMP/try.log"
+          ls "$RUNNER_TEMP/shots"/frame-*.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: idle-fighterz-saver-macos
+          path: |
+            saver/build/Idle FighterZ.saver
+            ${{ runner.temp }}/shots
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: saver
+      - name: cargo test and clippy
+        working-directory: saver
+        run: |
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: build the .scr
+        shell: bash
+        run: |
+          cargo build --release --manifest-path saver/Cargo.toml --bin idle-fighterz-saver
+          mkdir -p saver/build && cp saver/target/release/idle-fighterz-saver.exe saver/build/IdleFighterZ.scr
+      # full screen (/s) and the settings dialog's preview (/p, into a window of our own) must both start and keep
+      # running; nothing moves the pointer on the runner, so /s only ends when stopped
+      - name: smoke test
+        shell: pwsh
+        run: |
+          # the same binary as the .scr: started by its .scr name, the shell's verb for .scr files would replace our arguments with /S
+          $scr = Resolve-Path saver/target/release/idle-fighterz-saver.exe
+          $p = Start-Process $scr -ArgumentList '/s' -PassThru
+          Start-Sleep 5
+          if ($p.HasExited) { throw "/s exited with $($p.ExitCode)" }
+          Stop-Process $p
+          Add-Type -AssemblyName System.Windows.Forms
+          $f = New-Object System.Windows.Forms.Form
+          $f.Show()
+          $p = Start-Process $scr -ArgumentList '/p', $f.Handle -PassThru
+          for ($i = 0; $i -lt 20; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 250 }
+          if ($p.HasExited) { throw "/p exited with $($p.ExitCode)" }
+          $f.Close(); $f.Dispose()
+          for ($i = 0; $i -lt 4; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
+          if (-not $p.WaitForExit(5000)) { Stop-Process $p; throw "/p outlived its preview window" }
+          '/s and /p ran, and /p ended with its window'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: idle-fighterz-saver-windows
+          path: saver/build/IdleFighterZ.scr

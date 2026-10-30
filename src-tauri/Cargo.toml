@@ -21,6 +21,8 @@ planet-core = { path = "../game/rust/planet-core", optional = true }
 planet-render = { path = "../game/rust/planet-render", optional = true }
 # the hidden game's quiet hours, in local time (feature rust-core)
 chrono = { version = "=0.4.45", optional = true, default-features = false, features = ["clock"] }
+# the screensaver mirrors the run over it (feature rust-core): saver/link, a local socket or pipe, nothing on disk
+saver-link = { path = "../saver/link", optional = true }
 
 # macOS notifications go through UNUserNotificationCenter directly: it asks for permission and reports it
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -46,7 +48,7 @@ default = ["rust-core", "native-renderer"]
 native-renderer = ["dep:objc2-core-foundation", "dep:objc2-core-graphics", "dep:objc2-quartz-core", "dep:png", "dep:objc2-io-surface", "dep:libc"]
 # planet-core runs the game natively and planet-render draws it, behind a HUD-only page (see NATIVE.md); without it,
 # game.js runs the game in the web view
-rust-core = ["dep:planet-core", "dep:planet-render", "dep:chrono"]
+rust-core = ["dep:planet-core", "dep:planet-render", "dep:chrono", "dep:saver-link"]
 
 [dev-dependencies]
 tauri = { version = "=2.12.1", features = ["test"] }
@@ -66,6 +68,8 @@ x11-dl = "=2.21.0"
 # the taskbar's light or dark theme, for the same
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "=0.56.0"
+# the screensaver install: its 8.3 path, and telling Windows screensavers are on
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 codegen-units = 1

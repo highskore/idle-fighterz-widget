@@ -1,0 +1,16 @@
+[package]
+name = "saver-link"
+description = "The Idle FighterZ screensaver's live view of the widget's run: the frame protocol and its local transport"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+# the handshake: both ends prove they hold the user's key (HMAC-SHA256 over fresh nonces)
+hmac = "=0.12.1"
+sha2 = "=0.10.9"
+getrandom = "=0.3.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }

@@ -23,6 +23,7 @@ mod native;
 #[cfg(feature = "rust-core")]
 #[macro_use]
 mod planet;
+mod screensaver;
 
 // window sides in points, square: the planet sits in the middle with room for its visitors
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
@@ -523,6 +524,15 @@ fn main() {
                         Err(e) => eprintln!("engine: no layer under the page ({e})"),
                     }
                 }
+                // the screensaver mirrors the run (macOS, Windows): it connects, and the tick draws for it until it goes
+                #[cfg(any(target_os = "macos", windows))]
+                {
+                    let h = app.handle().clone();
+                    match saver_link::Hub::start(move || h.state::<Shown>().poke()) {
+                        Ok(hub) => app.state::<planet::Core>().set_saver(hub),
+                        Err(e) => eprintln!("screensaver: no link to it ({e})"),
+                    }
+                }
                 eprintln!("engine: the Rust core, behind the HUD page");
                 smoke("engine: the Rust core");
                 let https = app.config().app.windows.iter().any(|w| w.label == "main" && w.use_https_scheme);
@@ -656,6 +666,10 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, none)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
+    // only in builds that carry the screensaver (saver/README.md)
+    if screensaver::bundled(app).is_some() {
+        menu.insert(&MenuItem::with_id(app, "screensaver", "Install Screensaver…", true, none)?, 6)?;
+    }
 
     // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
     // match the taskbar (or as picked in settings), and follows it when the theme changes
@@ -688,6 +702,10 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
                     });
                 }
                 "quit" => quit(app),
+                "screensaver" => match screensaver::install(&app) {
+                    Ok(next) => notify(app, "screensaver installed".into(), next.into()),
+                    Err(e) => notify(app, "couldn't install the screensaver".into(), e),
+                },
                 "top" => {
                     let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
                     let _ = set_settings(app, json!({ "on_top": on }));
