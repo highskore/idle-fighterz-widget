@@ -1,6 +1,7 @@
 // The Windows screensaver (IdleFighterZ.scr is this exe renamed). Windows runs it with /s (full screen), /p <hwnd> (the
-// little preview in the settings dialog) or /c (settings: there are none). GDI draws the frame scaled up
-// nearest-neighbour; a 33 ms timer polls `Saver`, so it never draws more than 30 frames a second.
+// little preview in the settings dialog) or /c (settings: there are none). GDI draws the picture `Saver` composes (the
+// planet over the site's sky and cloud sea) scaled up nearest-neighbour; a 33 ms timer polls it, so it never draws more
+// than 30 frames a second.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(not(windows))]
@@ -18,14 +19,12 @@ mod win {
     use ifz_saver::Saver;
     use std::cell::RefCell;
     use windows_sys::Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     };
 
-    // the screensaver's ground: the widget's planet floats on near-black
-    const BG: [u8; 3] = [0x07, 0x07, 0x0c];
     const TIMER: usize = 1;
 
     enum Mode {
@@ -36,11 +35,16 @@ mod win {
 
     struct App {
         saver: Saver,
-        /// the frame composited over BG, as GDI wants it: BGRx rows top to bottom
+        /// the picture as GDI wants it: BGRx rows top to bottom, `w`×`h` game pixels, each `scale` device pixels
         bgr: Vec<u8>,
         w: usize,
         h: usize,
+        scale: f64,
         power: String,
+        power_y: f64,
+        power_px: f64,
+        muted: u32,
+        ink: u32,
         full: bool,
         /// where the pointer first was (full screen: a move away from it ends the screensaver)
         at: Option<(i32, i32)>,
@@ -99,7 +103,12 @@ mod win {
                     bgr: Vec::new(),
                     w: 0,
                     h: 0,
+                    scale: 1.0,
                     power: String::new(),
+                    power_y: 0.0,
+                    power_px: 0.0,
+                    muted: 0,
+                    ink: 0,
                     full,
                     at: None,
                     font: std::ptr::null_mut(),
@@ -175,16 +184,18 @@ mod win {
                     DestroyWindow(hwnd);
                     return 0;
                 }
-                let fresh = APP.with(|a| a.borrow_mut().as_mut().is_some_and(take));
+                let fresh = APP.with(|a| a.borrow_mut().as_mut().is_some_and(|app| take(hwnd, app)));
                 if fresh {
                     InvalidateRect(hwnd, std::ptr::null(), 0);
                 }
                 0
             }
             WM_ERASEBKGND => {
+                // the sky, beyond the picture (displays other than the primary)
+                let sky = APP.with(|a| a.borrow().as_ref().and_then(|a| a.bgr.get(..3).map(|p| [p[2], p[1], p[0]]))).unwrap_or([0xfc, 0xfc, 0xfb]);
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                let b = CreateSolidBrush(rgb(BG));
+                let b = CreateSolidBrush(rgb(sky));
                 FillRect(wp as HDC, &r, b);
                 DeleteObject(b);
                 1
@@ -243,43 +254,47 @@ mod win {
         c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16
     }
 
-    // polls the saver; on a new frame composites it over BG into `bgr`
-    fn take(app: &mut App) -> bool {
-        let shot = app.saver.poll();
+    // 0xRRGGBB as a COLORREF
+    fn hex(c: u32) -> u32 {
+        rgb([(c >> 16) as u8, (c >> 8) as u8, c as u8])
+    }
+
+    // where the picture goes: full screen spans every display, so the primary one, which starts at the virtual
+    // screen's (0, 0); the preview is the whole window
+    unsafe fn area(hwnd: HWND, full: bool) -> (i32, i32, i32, i32) {
+        if full {
+            return (-GetSystemMetrics(SM_XVIRTUALSCREEN), -GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+        }
+        let mut r: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut r);
+        (0, 0, r.right, r.bottom)
+    }
+
+    // polls the saver; on a new picture keeps it as BGRx
+    fn take(hwnd: HWND, app: &mut App) -> bool {
+        // SAFETY: GetSystemMetrics and GetClientRect on our own window
+        let (_, _, cw, ch) = unsafe { area(hwnd, app.full) };
+        let shot = app.saver.poll(cw.max(1) as f64, ch.max(1) as f64);
         if !shot.fresh || shot.w == 0 {
             return false;
         }
         app.bgr.resize(shot.w * shot.h * 4, 0);
         for (o, p) in app.bgr.as_chunks_mut::<4>().0.iter_mut().zip(shot.rgba.as_chunks::<4>().0) {
-            let a = p[3] as u32;
-            for (c, (&src, &bg)) in [p[2], p[1], p[0]].iter().zip([BG[2], BG[1], BG[0]].iter()).enumerate() {
-                o[c] = ((src as u32 * a + bg as u32 * (255 - a) + 127) / 255) as u8;
-            }
-            o[3] = 0;
+            *o = [p[2], p[1], p[0], 0];
         }
-        (app.w, app.h) = (shot.w, shot.h);
+        (app.w, app.h, app.scale) = (shot.w, shot.h, shot.scale);
+        (app.power_y, app.power_px, app.muted, app.ink) = (shot.power_y, shot.power_px, shot.muted, shot.ink);
         app.power.clone_from(&shot.power.to_string());
         true
     }
 
-    // the frame centred a little above the middle, at the biggest whole scale that leaves a margin (or shrunk to fit
-    // the preview), and the power level under it
+    // the picture from the area's top left, and the power level on it: "power" muted, the number in ink
     unsafe fn paint(hwnd: HWND, dc: HDC, app: &mut App) {
         if app.w == 0 {
             return;
         }
-        let mut r: RECT = std::mem::zeroed();
-        GetClientRect(hwnd, &mut r);
-        // full screen spans every display: centre on the primary one, which starts at the virtual screen's (0, 0)
-        let (ox, oy, cw, ch) = if app.full {
-            (-GetSystemMetrics(SM_XVIRTUALSCREEN), -GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
-        } else {
-            (0, 0, r.right, r.bottom)
-        };
-        let fit = (cw as f64 * 0.8 / app.w as f64).min(ch as f64 * 0.72 / app.h as f64);
-        let k = if fit >= 1.0 { fit.floor() } else { fit };
-        let (dw, dh) = ((app.w as f64 * k) as i32, (app.h as f64 * k) as i32);
-        let (dx, dy) = (ox + (cw - dw) / 2, oy + (ch - dh) / 2 - ch / 20);
+        let (ox, oy, cw, _) = area(hwnd, app.full);
+        let (dw, dh) = ((app.w as f64 * app.scale).round() as i32, (app.h as f64 * app.scale).round() as i32);
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -293,11 +308,11 @@ mod win {
             ..std::mem::zeroed()
         };
         SetStretchBltMode(dc, COLORONCOLOR);
-        StretchDIBits(dc, dx, dy, dw, dh, 0, 0, app.w as i32, app.h as i32, app.bgr.as_ptr().cast(), &bmi, DIB_RGB_COLORS, SRCCOPY);
-        if app.power.is_empty() || !app.full && ch < 200 {
+        StretchDIBits(dc, ox, oy, dw, dh, 0, 0, app.w as i32, app.h as i32, app.bgr.as_ptr().cast(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+        if app.power.is_empty() || app.power_px == 0.0 {
             return;
         }
-        let px = (k as i32 * 9).clamp(14, 48);
+        let px = app.power_px.round() as i32;
         if px != app.font_px {
             if !app.font.is_null() {
                 DeleteObject(app.font);
@@ -308,7 +323,7 @@ mod win {
                 0,
                 0,
                 0,
-                FW_SEMIBOLD as i32,
+                FW_NORMAL as i32,
                 0,
                 0,
                 0,
@@ -322,12 +337,20 @@ mod win {
             app.font_px = px;
         }
         let old = SelectObject(dc, app.font);
-        SetTextColor(dc, rgb([0xd8, 0xd8, 0xe0]));
-        SetBkColor(dc, rgb(BG));
-        SetTextAlign(dc, TA_CENTER | TA_TOP);
-        let text: Vec<u16> = format!("power {}", app.power).encode_utf16().collect();
-        let band = RECT { left: ox, top: dy + dh + px / 2, right: ox + cw, bottom: dy + dh + px * 2 };
-        ExtTextOutW(dc, ox + cw / 2, band.top, ETO_OPAQUE, &band, text.as_ptr(), text.len() as u32, std::ptr::null());
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        let label: Vec<u16> = "power ".encode_utf16().collect();
+        let value: Vec<u16> = app.power.encode_utf16().collect();
+        let mut sl: SIZE = std::mem::zeroed();
+        let mut sv: SIZE = std::mem::zeroed();
+        GetTextExtentPoint32W(dc, label.as_ptr(), label.len() as i32, &mut sl);
+        GetTextExtentPoint32W(dc, value.as_ptr(), value.len() as i32, &mut sv);
+        let x = ox + (cw - sl.cx - sv.cx) / 2;
+        let y = oy + (app.power_y - px as f64 * 0.6).round() as i32;
+        SetTextColor(dc, hex(app.muted));
+        TextOutW(dc, x, y, label.as_ptr(), label.len() as i32);
+        SetTextColor(dc, hex(app.ink));
+        TextOutW(dc, x + sl.cx, y, value.as_ptr(), value.len() as i32);
         SelectObject(dc, old);
     }
 }

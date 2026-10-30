@@ -25,6 +25,7 @@ fn frame_payload(w: u16, h: u16, enc: u8, power: &[u8], data: &[u8]) -> Vec<u8> 
     p.extend_from_slice(&h.to_le_bytes());
     p.push(enc);
     p.push(power.len() as u8);
+    p.extend_from_slice(&[0, 0]);
     p.extend_from_slice(power);
     p.extend_from_slice(data);
     p
@@ -37,8 +38,8 @@ fn hello_round_trips_and_checks_magic_and_version() {
     h[0] = b'X';
     assert_eq!(parse_hello(&h), Err(Error::Magic));
     let mut h = hello(501);
-    h[4] = 2;
-    assert_eq!(parse_hello(&h), Err(Error::Version(2)));
+    h[4] = 1;
+    assert_eq!(parse_hello(&h), Err(Error::Version(1)));
 }
 
 #[test]
@@ -46,17 +47,18 @@ fn a_flat_frame_goes_as_runs_and_comes_back_whole() {
     let (w, h) = (400, 356);
     let mut rgba = vec![0u8; w * h * 4];
     rgba[4 * (w * 100 + 200)..4 * (w * 100 + 260)].fill(200);
-    let m = encode_frame(&rgba, w, h, "1.2M").unwrap();
+    let sky = Sky { world: 8, night: 200 };
+    let m = encode_frame(&rgba, w, h, "1.2M", sky).unwrap();
     assert_eq!(msg_payload(&m)[4], ENC_RLE);
     assert!(m.len() < 200, "{} bytes", m.len());
-    assert_eq!(decode_frame(msg_payload(&m)), Ok(Frame { w, h, power: "1.2M".into(), rgba }));
+    assert_eq!(decode_frame(msg_payload(&m)), Ok(Frame { w, h, power: "1.2M".into(), sky, rgba }));
 }
 
 #[test]
 fn a_noisy_frame_goes_raw() {
     let mut seed = 7;
     let rgba = noise(64 * 48 * 4, &mut seed);
-    let m = encode_frame(&rgba, 64, 48, "").unwrap();
+    let m = encode_frame(&rgba, 64, 48, "", Sky::default()).unwrap();
     assert_eq!(msg_payload(&m)[4], ENC_RAW);
     assert_eq!(decode_frame(msg_payload(&m)).unwrap().rgba, rgba);
 }
@@ -65,22 +67,22 @@ fn a_noisy_frame_goes_raw() {
 fn runs_longer_than_a_u16_split() {
     let (w, h) = (1024, 100);
     let rgba = vec![9u8; w * h * 4];
-    let m = encode_frame(&rgba, w, h, "").unwrap();
+    let m = encode_frame(&rgba, w, h, "", Sky::default()).unwrap();
     assert_eq!(decode_frame(msg_payload(&m)).unwrap().rgba, rgba);
 }
 
 #[test]
 fn the_power_level_is_cut_on_a_char_boundary() {
     let long = "é".repeat(40);
-    let f = decode_frame(msg_payload(&encode_frame(&[0; 4], 1, 1, &long).unwrap())).unwrap();
+    let f = decode_frame(msg_payload(&encode_frame(&[0; 4], 1, 1, &long, Sky::default()).unwrap())).unwrap();
     assert_eq!(f.power, "é".repeat(16));
 }
 
 #[test]
 fn encode_refuses_bad_sizes() {
-    assert!(encode_frame(&[], 0, 1, "").is_none());
-    assert!(encode_frame(&vec![0; (MAX_SIDE + 1) * 4], MAX_SIDE + 1, 1, "").is_none());
-    assert!(encode_frame(&[0; 8], 1, 1, "").is_none());
+    assert!(encode_frame(&[], 0, 1, "", Sky::default()).is_none());
+    assert!(encode_frame(&vec![0; (MAX_SIDE + 1) * 4], MAX_SIDE + 1, 1, "", Sky::default()).is_none());
+    assert!(encode_frame(&[0; 8], 1, 1, "", Sky::default()).is_none());
 }
 
 #[test]
@@ -138,7 +140,7 @@ fn a_huge_length_is_refused_before_reading_or_allocating() {
 
 #[test]
 fn a_cut_off_message_is_an_error() {
-    let m = encode_frame(&[5; 16], 2, 2, "7").unwrap();
+    let m = encode_frame(&[5; 16], 2, 2, "7", Sky::default()).unwrap();
     for cut in 0..m.len() {
         assert!(read_frame(&mut &m[..cut]).is_err(), "cut at {cut}");
     }
@@ -148,14 +150,14 @@ fn a_cut_off_message_is_an_error() {
 #[test]
 fn other_kinds_are_skipped() {
     let mut s = vec![9u8, 3, 0, 0, 0, 1, 2, 3];
-    s.extend(encode_frame(&[5; 4], 1, 1, "x").unwrap());
+    s.extend(encode_frame(&[5; 4], 1, 1, "x", Sky::default()).unwrap());
     assert_eq!(read_frame(&mut &s[..]).unwrap().power, "x");
 }
 
 #[test]
 fn garbage_never_panics() {
     let mut seed = 0x1234_5678;
-    let good = encode_frame(&[1, 2, 3, 4, 1, 2, 3, 4, 9, 9, 9, 9, 0, 0, 0, 0], 2, 2, "42").unwrap();
+    let good = encode_frame(&[1, 2, 3, 4, 1, 2, 3, 4, 9, 9, 9, 9, 0, 0, 0, 0], 2, 2, "42", Sky::default()).unwrap();
     for i in 0..20_000 {
         let mut b = if i % 2 == 0 { noise(1 + i % 64, &mut seed) } else { good.clone() };
         if i % 2 == 1 {
@@ -215,14 +217,14 @@ fn a_screensaver_attaches_gets_frames_and_detaches() {
     until("attach", || hub.attached());
     assert_eq!(changes.load(Ordering::Relaxed), 1);
     let rgba: Vec<u8> = (0..40 * 30 * 4).map(|i| (i / 64) as u8).collect();
-    hub.publish(&rgba, 40, 30, "9.9K");
+    hub.publish(&rgba, 40, 30, "9.9K", Sky::default());
     let f = c.read_frame().unwrap();
     assert_eq!((f.w, f.h, f.power.as_str()), (40, 30, "9.9K"));
     assert_eq!(f.rgba, rgba);
     drop(c);
     // the hub hears of it on its next write
     until("detach", || {
-        hub.publish(&rgba, 40, 30, "");
+        hub.publish(&rgba, 40, 30, "", Sky::default());
         !hub.attached()
     });
     until("the change", || changes.load(Ordering::Relaxed) == 2);
@@ -265,7 +267,7 @@ fn a_screensaver_without_the_key_gets_nothing() {
     c.write_all(&[9; MAC]).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     assert!(!hub.attached());
-    hub.publish(&[1; 4], 1, 1, "secret");
+    hub.publish(&[1; 4], 1, 1, "secret", Sky::default());
     let mut b = [0u8; 1];
     assert!(!matches!(c.read(&mut b), Ok(1)), "no frame for it");
 }
@@ -317,9 +319,10 @@ fn a_server_that_isnt_ours_is_refused() {
         });
         ep
     };
-    let mut v2 = hello(user()).to_vec();
-    v2[4] = 2;
-    assert_eq!(connect(&serve(v2)).err(), Some(Error::Version(2)));
+    // a widget from before frames carried the sky
+    let mut v1 = hello(user()).to_vec();
+    v1[4] = 1;
+    assert_eq!(connect(&serve(v1)).err(), Some(Error::Version(1)));
     assert_eq!(connect(&serve(b"HTTP/1.1 400 Bad Request\r\n\r\n".repeat(3))).err(), Some(Error::Magic));
     // a squatter on the port: our hello, but no proof
     let squat = [hello(user()).as_slice(), &[0; NONCE + MAC]].concat();
@@ -384,8 +387,8 @@ fn tagged(sk: &[u8; KEY_LEN], seq: u64, m: &[u8]) -> Vec<u8> {
 #[cfg(not(windows))]
 #[test]
 fn frames_are_tagged_in_order() {
-    let a = encode_frame(&[1; 16], 2, 2, "a").unwrap();
-    let b = encode_frame(&[2; 16], 2, 2, "b").unwrap();
+    let a = encode_frame(&[1; 16], 2, 2, "a", Sky::default()).unwrap();
+    let b = encode_frame(&[2; 16], 2, 2, "b", Sky::default()).unwrap();
     let mut s = connect(&rogue(None, move |c, sk| {
         c.write_all(&tagged(&sk, 0, &a)).unwrap();
         c.write_all(&tagged(&sk, 1, &b)).unwrap();
@@ -401,7 +404,7 @@ type Rogue = Box<dyn Fn(&[u8; KEY_LEN]) -> Vec<u8> + Send>;
 #[cfg(not(windows))]
 #[test]
 fn a_tampered_replayed_reordered_or_untagged_frame_is_refused() {
-    let m = encode_frame(&[1; 16], 2, 2, "a").unwrap();
+    let m = encode_frame(&[1; 16], 2, 2, "a", Sky::default()).unwrap();
     let cases: Vec<(&str, Rogue)> = vec![
         ("tampered", {
             let m = m.clone();
