@@ -15,6 +15,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+mod system;
 #[cfg(target_os = "macos")]
 mod notes;
 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
@@ -22,16 +23,15 @@ mod native;
 #[cfg(feature = "rust-core")]
 #[macro_use]
 mod planet;
-mod system;
 
 // window sides in points, square: the planet sits in the middle with room for its visitors
 const SIZES: [(&str, &str, f64); 3] = [("small", "Small", 300.0), ("medium", "Medium", 400.0), ("large", "Large", 560.0)];
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
   "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto",
-  "ghost": false, "auto_hide": true, "battery_auto": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
+  "ghost": false, "auto_hide": true, "battery_auto": true,
   "shortcut": "Alt+Cmd+KeyP"
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -655,7 +655,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let name = &app.package_info().name;
     let quit_item = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, none)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &ghost, &size, &login, &sep, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &sep, &top, &size, &login, &sep, &quit_item])?;
 
     // the scouter is a black template image that macOS tints; Windows and Linux don't, so there it's black or white to
     // match the taskbar (or as picked in settings), and follows it when the theme changes
@@ -706,6 +706,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    menu.insert(&ghost, 4)?; // after always on top
     let tray = Tray {
         show,
         top,
