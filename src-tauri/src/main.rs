@@ -15,6 +15,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+mod system;
 #[cfg(target_os = "macos")]
 mod notes;
 #[cfg(all(target_os = "macos", feature = "native-renderer"))]
@@ -30,6 +31,7 @@ const DEFAULTS: &str = r#"{
   "on_top": true, "size": "medium", "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto",
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
+  "ghost": false, "auto_hide": true, "battery_auto": true,
   "shortcut": "Alt+Cmd+KeyP"
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -41,6 +43,7 @@ const SHORTCUT: &str = "Ctrl+Alt+KeyP"; // Win+Alt+P / Super+Alt+P belong to the
 struct Tray {
     show: MenuItem<Wry>,
     top: CheckMenuItem<Wry>,
+    ghost: CheckMenuItem<Wry>,
     sizes: Vec<CheckMenuItem<Wry>>,
     login: CheckMenuItem<Wry>,
     #[cfg(target_os = "linux")]
@@ -108,6 +111,11 @@ fn initial_settings(saved: Option<&Value>) -> Value {
     {
         settings["shortcut"] = json!(SHORTCUT);
     }
+    // X11 only, and best effort: off unless picked
+    #[cfg(target_os = "linux")]
+    {
+        settings["auto_hide"] = json!(false);
+    }
     if let Some(saved) = saved {
         merge(&mut settings, saved);
     }
@@ -140,7 +148,19 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     if !transparent {
         s["mode"] = json!("window");
     }
+    // the frame rate the widget draws at, and the one picked in settings
+    let pick = s["fps"].as_f64().unwrap_or(30.0);
+    let rate = system::frame_rate(pick, s["battery_auto"].as_bool().unwrap_or(true), app.state::<system::Sys>().saving.load(std::sync::atomic::Ordering::Relaxed));
+    s["fps_pick"] = s["fps"].take();
+    s["fps"] = json!(rate as u64);
+    s["battery_saving"] = json!(rate != pick);
     s
+}
+
+// the pages hear the settings again, for a change that isn't theirs (the battery saver)
+fn publish(app: &AppHandle) {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    let _ = app.emit("settings", with_login(app, s));
 }
 
 #[tauri::command]
@@ -224,6 +244,8 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let tray = app.state::<State>().tray.lock().unwrap().clone();
     if let Some(t) = tray {
         let _ = t.top.set_checked(on_top);
+        let _ = t.ghost.set_checked(s["ghost"].as_bool().unwrap_or(false));
+        let _ = t.ghost.set_enabled(!windowed);
         for (k, item) in t.sizes.iter().enumerate() {
             let _ = item.set_checked(k == size);
         }
@@ -281,6 +303,7 @@ fn show_widget(app: &AppHandle, show: bool) {
         let _ = w.controller().SetIsVisible(show);
     });
     app.state::<Shown>().set(show);
+    app.state::<system::Sys>().auto_hidden.store(false, std::sync::atomic::Ordering::Relaxed); // shown or hidden by hand
     // and the page hears it from the app too, wherever document.hidden doesn't follow the window
     let _ = win.emit("shown", show);
     let item = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.show.clone());
@@ -472,6 +495,7 @@ fn main() {
             let main = app.get_webview_window("main").expect("main window");
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
+            app.manage(system::Sys::default());
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default() });
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
@@ -508,6 +532,7 @@ fn main() {
             if !wayland {
                 watch_pointer(app.handle().clone());
             }
+            system::watch(app.handle(), wayland);
             // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
             #[cfg(all(target_os = "macos", feature = "native-renderer"))]
             if let Some(src) = saved.as_ref().and_then(native::wanted) {
@@ -554,10 +579,12 @@ fn hud_url(page: &tauri::Url, https: bool) -> tauri::Url {
     })
 }
 
-// the frame-rate setting: 15, 30 (the default) or 60
+// the frame-rate setting: 15, 30 (the default) or 60, and 15 in place of 30 while the battery saver is on
 #[cfg_attr(not(any(feature = "rust-core", all(target_os = "macos", feature = "native-renderer"))), allow(dead_code))]
 fn fps(app: &AppHandle) -> f64 {
-    app.state::<State>().settings.lock().unwrap()["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0)
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    let pick = s["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0);
+    system::frame_rate(pick, s["battery_auto"].as_bool().unwrap_or(true), app.state::<system::Sys>().saving.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 // on X11 with no compositing manager, transparent pixels come out black: the widget then sticks to window mode
@@ -601,7 +628,9 @@ fn watch_pointer(app: AppHandle) {
             let Some(w) = app.get_webview_window("main") else { continue };
             let (Ok(c), Ok(p), Ok(s), Ok(f)) = (app.cursor_position(), w.outer_position(), w.outer_size(), w.scale_factor()) else { continue };
             let (x, y) = ((c.x - p.x as f64) / f, (c.y - p.y as f64) / f);
-            let inside = x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
+            // in ghost mode the widget takes no clicks, so it doesn't wake to the pointer either, until ⌥ is held
+            let ghosted = app.state::<system::Sys>().ghosted.load(std::sync::atomic::Ordering::Relaxed);
+            let inside = !ghosted && x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
             let now = inside.then_some((x.round() as i32, y.round() as i32));
             if now != last {
                 let _ = w.emit("pointer", json!({ "inside": inside, "x": x, "y": y }));
@@ -616,6 +645,7 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Hide Planet", true, none)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, none)?;
     let top = CheckMenuItem::with_id(app, "top", "Always on Top", true, true, none)?;
+    let ghost = CheckMenuItem::with_id(app, "ghost", "Ghost Mode (Click-Through)", true, false, none)?;
     let sizes = SIZES
         .iter()
         .map(|(id, label, _)| CheckMenuItem::with_id(app, *id, *label, true, false, none))
@@ -662,6 +692,10 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
                     let on = !app.state::<State>().settings.lock().unwrap()["on_top"].as_bool().unwrap_or(true);
                     let _ = set_settings(app, json!({ "on_top": on }));
                 }
+                "ghost" => {
+                    let on = !app.state::<State>().settings.lock().unwrap()["ghost"].as_bool().unwrap_or(false);
+                    let _ = set_settings(app, json!({ "ghost": on }));
+                }
                 "login" => {
                     let on = !app.autolaunch().is_enabled().unwrap_or(false);
                     let _ = set_settings(app, json!({ "login": on }));
@@ -672,9 +706,11 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    menu.insert(&ghost, 4)?; // after always on top
     let tray = Tray {
         show,
         top,
+        ghost,
         sizes,
         login,
         #[cfg(target_os = "linux")]
@@ -843,6 +879,19 @@ mod tests {
             assert_eq!(super::initial_settings(Some(&json!({ "layout": layout })))["layout"], json!(layout));
         }
         assert_eq!(super::initial_settings(Some(&json!({ "layout": 5 })))["layout"], json!(7));
+    }
+
+    // a settings.json as 0.2.1 saved it, battery saver picked: ghost mode, auto-hide and the automatic battery saver
+    // come in at their defaults, and the pick stays
+    #[test]
+    fn a_0_2_1_settings_file_merges() {
+        let saved = json!({ "on_top": true, "size": "small", "fps": 15, "mode": "floating", "tray_icon": "dark", "menubar_power": false });
+        let s = super::initial_settings(Some(&saved));
+        assert_eq!((s["ghost"].clone(), s["battery_auto"].clone()), (json!(false), json!(true)));
+        assert_eq!(s["auto_hide"], json!(!cfg!(target_os = "linux")));
+        assert_eq!((s["fps"].clone(), s["size"].clone(), s["menubar_power"].clone()), (json!(15), json!("small"), json!(false)));
+        let picked = super::initial_settings(Some(&json!({ "ghost": true, "auto_hide": false, "battery_auto": false })));
+        assert_eq!((picked["ghost"].clone(), picked["auto_hide"].clone(), picked["battery_auto"].clone()), (json!(true), json!(false), json!(false)));
     }
 
     // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first

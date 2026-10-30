@@ -1743,6 +1743,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "winreg 0.56.0",
+ "x11-dl",
  "zbus",
 ]
 
