@@ -58,7 +58,10 @@ select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-
 <div class="row"><span>layout</span><div class="seg" data-seg="layout"><button data-v="7">dock</button><button data-v="1">ring</button><button data-v="2">pill</button><button data-v="3">corners</button><button data-v="6">strip</button></div></div>
 <div class="row"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
 <div class="row"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
+<label class="row"><span>battery saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
 <div class="row"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+<label class="row"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
+<label class="row" id="hiderow"><span>hide for fullscreen apps <small>and slideshows</small></span><input type="checkbox" data-k="auto_hide"></label>
 <div class="row"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
 <label class="row"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
 <label class="row"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
@@ -91,7 +94,7 @@ function render(v) {
   s = v;
   document.querySelectorAll('[data-k]').forEach(i => { i.checked = !!s[i.dataset.k]; });
   document.querySelectorAll('[data-n]').forEach(i => { i.checked = !!s.notify[i.dataset.n]; });
-  document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg]) === b.dataset.v)));
+  document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg === 'fps' ? 'fps_pick' : g.dataset.seg]) === b.dataset.v)));
   $('camt').value = s.cloud_amount; $('cav').textContent = s.cloud_amount;
   $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
   $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));
@@ -102,6 +105,11 @@ function render(v) {
   $('bar').textContent = MAC ? 'menu bar' : 'tray';
   // macOS tints its template icon itself; Windows and Linux pick white or black (auto follows the taskbar)
   $('trayrow').hidden = MAC;
+  // balanced drops to battery saver on battery or in low power mode (main.rs); an explicit pick stays
+  $('battv').textContent = s.battery_saving ? 'on now' : '';
+  // clicks go through a floating widget; ⌥ held takes them again (not on wayland, which shows apps no keys but their own)
+  $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through, ' + (s.wayland ? 'off from the tray' : 'hold ' + (MAC ? '⌥' : 'alt') + ' to use it');
+  $('hiderow').hidden = !!s.wayland;
   // no compositor (Linux): the window can't be see-through, so floating isn't on offer
   document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
   // wayland has no global shortcut (main.rs): the key picker gives way to a hint
