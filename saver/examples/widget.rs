@@ -17,7 +17,7 @@ fn main() {
         }
         let now = Instant::now();
         if demo.step((now - last).as_secs_f64(), 0.0) {
-            hub.publish(demo.fb.rgba(), DEMO_W, DEMO_H, "stand-in");
+            hub.publish(demo.fb.rgba(), DEMO_W, DEMO_H, "stand-in", demo.sky());
             sent += 1;
         }
         last = now;

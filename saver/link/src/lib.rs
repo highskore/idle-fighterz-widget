@@ -12,8 +12,9 @@
 //!   (HMAC(key, "IFZS session" ‖ nonces ‖ port)) over the message's sequence number (`u64`, from 0) and its bytes. A bad
 //!   tag (changed, replayed, reordered or injected) ends the connection
 //! - a message: kind `u8`, payload length `u32`, payload. Kind 1 is a frame: width
-//!   `u16`, height `u16`, encoding `u8`, power length `u8`, the power level (UTF-8), then the pixels: RGBA8 rows top to
-//!   bottom (encoding 0), or runs of `count u16` + one RGBA8 pixel (encoding 1). Other kinds are skipped.
+//!   `u16`, height `u16`, encoding `u8`, power length `u8`, the world `u8` and its night `u8` (the screensaver's sky),
+//!   the power level (UTF-8), then the pixels: RGBA8 rows top to bottom (encoding 0), or runs of `count u16` + one
+//!   RGBA8 pixel (encoding 1). Other kinds are skipped.
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,7 +22,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub const MAGIC: [u8; 4] = *b"IFZS";
-pub const VERSION: u16 = 1;
+/// 2: frames carry the world and its night
+pub const VERSION: u16 = 2;
 pub const HELLO_LEN: usize = 12;
 pub const KIND_FRAME: u8 = 1;
 pub const ENC_RAW: u8 = 0;
@@ -29,7 +31,7 @@ pub const ENC_RLE: u8 = 1;
 /// widest and tallest frame either side accepts (the widget's are at most 280×258 game pixels)
 pub const MAX_SIDE: usize = 1024;
 pub const MAX_POWER: usize = 32;
-const FRAME_HEAD: usize = 6;
+const FRAME_HEAD: usize = 8;
 /// the biggest payload a reader allocates: a frame of MAX_SIDE² pixels in runs of one (6 bytes a pixel)
 pub const MAX_PAYLOAD: usize = FRAME_HEAD + MAX_POWER + MAX_SIDE * MAX_SIDE * 6;
 /// screensavers served at once (a multi-display Mac runs one view per screen)
@@ -82,13 +84,22 @@ pub struct Frame {
     pub w: usize,
     pub h: usize,
     pub power: String,
+    pub sky: Sky,
     /// RGBA8, straight alpha, rows top to bottom
     pub rgba: Vec<u8>,
 }
 
+/// What the screensaver draws behind the frame: the game's world (its cloud sea) and how far into night it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Sky {
+    pub world: u8,
+    /// 0 day to 255 full night
+    pub night: u8,
+}
+
 /// The whole frame message (kind, length, payload), run-length encoded unless raw is smaller. None if the size is out
 /// of range or `rgba` isn't `w`×`h` pixels. The power level is cut to MAX_POWER bytes.
-pub fn encode_frame(rgba: &[u8], w: usize, h: usize, power: &str) -> Option<Vec<u8>> {
+pub fn encode_frame(rgba: &[u8], w: usize, h: usize, power: &str, sky: Sky) -> Option<Vec<u8>> {
     if !(1..=MAX_SIDE).contains(&w) || !(1..=MAX_SIDE).contains(&h) || rgba.len() != w * h * 4 {
         return None;
     }
@@ -122,6 +133,8 @@ pub fn encode_frame(rgba: &[u8], w: usize, h: usize, power: &str) -> Option<Vec<
     m.extend_from_slice(&(h as u16).to_le_bytes());
     m.push(enc);
     m.push(power.len() as u8);
+    m.push(sky.world);
+    m.push(sky.night);
     m.extend_from_slice(power);
     m.extend_from_slice(pixels);
     Some(m)
@@ -135,6 +148,7 @@ pub fn decode_frame(p: &[u8]) -> Result<Frame, Error> {
     let w = u16::from_le_bytes([p[0], p[1]]) as usize;
     let h = u16::from_le_bytes([p[2], p[3]]) as usize;
     let (enc, plen) = (p[4], p[5] as usize);
+    let sky = Sky { world: p[6], night: p[7] };
     if !(1..=MAX_SIDE).contains(&w) || !(1..=MAX_SIDE).contains(&h) {
         return Err(Error::Bad("frame size"));
     }
@@ -168,7 +182,7 @@ pub fn decode_frame(p: &[u8]) -> Result<Frame, Error> {
         }
         _ => return Err(Error::Bad("encoding")),
     };
-    Ok(Frame { w, h, power, rgba })
+    Ok(Frame { w, h, power, sky, rgba })
 }
 
 // fills `buf`, riding out read timeouts once a message has begun (up to `patience` of them); Idle if nothing came
@@ -769,13 +783,14 @@ impl Hub {
         })
     }
 
-    /// Sends a frame (RGBA8, `w`×`h`) and the power level to every screensaver; a newer frame replaces one not yet sent.
-    pub fn publish(&self, rgba: &[u8], w: usize, h: usize, power: &str) {
+    /// Sends a frame (RGBA8, `w`×`h`), the power level and the sky to every screensaver; a newer frame replaces one not
+    /// yet sent.
+    pub fn publish(&self, rgba: &[u8], w: usize, h: usize, power: &str, sky: Sky) {
         let slots = self.inner.slots.lock().unwrap();
         if slots.is_empty() {
             return;
         }
-        let Some(m) = encode_frame(rgba, w, h, power) else { return };
+        let Some(m) = encode_frame(rgba, w, h, power, sky) else { return };
         let m = Arc::new(m);
         for s in slots.iter() {
             *s.next.lock().unwrap() = Some(m.clone());

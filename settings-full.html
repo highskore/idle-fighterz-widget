@@ -112,6 +112,7 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 4px; }
 .cards button { font: inherit; font-size: 10px; padding: 6px 4px 5px; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 9px; cursor: pointer; text-transform: lowercase; }
 .cards button.on { color: var(--ink); border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.cards button:disabled { opacity: .45; cursor: default; }
 .cards svg { display: block; width: 100%; height: 44px; margin-bottom: 3px; }
 /* notifications */
 .ntrow { display: grid; grid-template-columns: 22px 1fr auto auto; align-items: center; gap: 8px; min-height: 34px; border-bottom: 1px solid var(--line); }
@@ -158,15 +159,15 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
   <p id="none" hidden>nothing matches</p>
 
   <section data-tab="look" class="on" data-name="look"><h3>look</h3>
-    <h2>layout</h2>
+    <div class="row" data-s="skin"><span>skin</span><div class="seg" data-seg="skin"><button data-v="classic">classic</button><button data-v="scouter">scouter</button><button data-v="capsule">capsule corp</button><button data-v="drawer">drawer</button></div></div>
+    <h2>layout <small id="layoutv" style="text-transform:none;letter-spacing:0"></small></h2>
     <div class="cards" data-s="layout" id="cards"></div>
     <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size" style="width: 260px"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
     <div class="grid2"><div>
       <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
       <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
       <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
-      <div class="row" data-s="theme" id="themerow" hidden><span>theme</span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
-      <label class="row" data-s="skin" id="skinrow" hidden><span>skin</span><select data-sel="skin" id="skin"></select></label>
+      <div class="row" data-s="theme"><span>theme <small id="themev"></small></span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
       <label class="row" data-s="menubar_power"><span>power in <b class="barname">menu bar</b></span><input type="checkbox" data-k="menubar_power"></label>
     </div><div>
       <label class="row" data-s="opacity"><span>opacity <small id="opv"></small></span><input type="range" min="30" max="100" step="5" id="opacity"></label>
@@ -259,7 +260,7 @@ function cards() {
   };
   $('cards').innerHTML = LAYOUTS.map(([v, n]) => `<button type="button" data-v="${v}" class="${s.layout === v ? 'on' : ''}"><svg viewBox="0 0 60 44" aria-hidden="true"><rect x=".5" y=".5" width="59" height="43" rx="6" fill="${dark ? '#2b2b31' : '#f4f1ec'}"/><circle cx="30" cy="20" r="9" fill="#5cc4a0"/>${D[v]}</svg>${n}</button>`).join('');
 }
-$('cards').addEventListener('click', e => { const b = e.target.closest('button'); if (b) set({ layout: +b.dataset.v }); });
+$('cards').addEventListener('click', e => { const b = e.target.closest('button'); if (b && !b.disabled) set({ layout: +b.dataset.v }); });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { cards(); if (!recall('wp')) wallpaper(); });
 
 // notifications, each with a preview
@@ -316,10 +317,10 @@ function render(v) {
   // linux's tray (AppIndicator) reports no clicks: only the menu
   document.querySelector('[data-seg="tray_style"] [data-v="popover"]').disabled = !s.popover_ok;
   $('trayv').textContent = s.popover_ok ? (s.tray_style === 'popover' ? 'right-click for the menu' : '') : 'not on linux';
-  // skin and theme (feat/hud-skins): shown once the app keeps them
-  $('themerow').hidden = !('theme' in s);
-  $('skinrow').hidden = !('skin' in s);
-  if ('skin' in s) skins();
+  // the scouter is always dark and capsule corp always light; the layouts are classic's
+  $('themev').textContent = { scouter: 'always dark', capsule: 'always light' }[s.skin] || '';
+  $('layoutv').textContent = s.skin === 'classic' ? '' : '· classic only';
+  all('#cards button').forEach(b => { b.disabled = s.skin !== 'classic'; });
   $('quit').textContent = 'quit ' + s.name.toLowerCase();
   $('appname').textContent = s.name; $('ver').textContent = 'version ' + s.version;
   if (!sliding()) $('size').value = s.size;
@@ -330,13 +331,6 @@ function render(v) {
   $('ref').innerHTML = REF().map(([k, t]) => `<li><span>${t}</span><kbd>${k}</kbd></li>`).join('');
   look();
   filter();
-}
-// the skins the app lists (s.skins), else the one it has now
-function skins() {
-  const list = Array.isArray(s.skins) && s.skins.length ? s.skins : [s.skin];
-  const key = list.join();
-  if ($('skin').dataset.k !== key) { $('skin').dataset.k = key; $('skin').innerHTML = list.map(k => `<option value="${esc(k)}">${esc(String(k).replace(/_/g, ' '))}</option>`).join(''); }
-  $('skin').value = s.skin;
 }
 
 // the size slider, its snap points as s / m / l
@@ -495,7 +489,13 @@ function hud() {
     3: `<div class="hcorner chip" style="left:8px;top:8px">${n} <span class="hr">${esc(rate)}</span>${bar}</div><div class="hcorner" style="right:8px;bottom:8px;padding:0">${btns}</div>`,
     6: `<div class="hstrip chip">${n}<span class="hr">${esc(rate)}</span><span style="flex:1"></span>${btns}${bar}</div>`,
   };
-  const html = L[s.layout] || L[7];
+  // the skins, roughly: a green glass scouter lens, a white capsule corp panel, a power chip with the drawer's tab
+  const SK = {
+    scouter: `<div style="position:absolute;right:14px;top:14px;padding:6px 12px;border-radius:12px;background:rgba(20,60,30,.82);color:#7dff9a;box-shadow:0 0 0 2px #1f2a22">${n}<div class="hr" style="color:#7dff9a">${esc(rate)}</div></div><div style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);padding:4px 8px;border-radius:12px;background:#1f2a22">${btns}</div>`,
+    capsule: `<div class="chip" style="position:absolute;left:10px;right:10px;bottom:8px;padding:8px 12px;border-radius:14px"><span style="color:#2f6fd6;font-size:9px">capsule corp</span><br>${n} <span class="hr">${esc(rate)}</span>${bar}<div style="margin-top:6px;padding:3px;border-radius:10px;background:#2f6fd6">${btns}</div></div>`,
+    drawer: `<div class="chip" style="position:absolute;left:8px;top:8px;padding:4px 10px;border-radius:10px">${n}</div><div style="position:absolute;left:8px;bottom:8px">${btns}</div><div class="chip" style="position:absolute;right:0;top:40%;width:16px;height:60px;border-radius:8px 0 0 8px"></div>`,
+  };
+  const html = SK[s.skin] || L[s.layout] || L[7];
   if ($('hud').dataset.html !== html) { $('hud').dataset.html = html; $('hud').innerHTML = html; }
 }
 

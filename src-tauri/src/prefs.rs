@@ -53,11 +53,24 @@ pub fn popover(style: &Value) -> bool {
     style.as_str() == Some("popover") && cfg!(not(target_os = "linux"))
 }
 
+/// the HUD skins and themes the widget page knows (game/skins.js); anything else reads as today's look
+pub const SKINS: [&str; 4] = ["classic", "scouter", "capsule", "drawer"];
+pub const THEMES: [&str; 3] = ["light", "dark", "auto"];
+
+/// a skin or theme this version doesn't know (a newer one's, or a typo) goes back to classic and light
+pub fn known_look(s: &mut Value) {
+    for (key, known, fallback) in [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light")] {
+        if !s[key].as_str().is_some_and(|v| known.contains(&v)) {
+            s[key] = json!(fallback);
+        }
+    }
+}
+
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 21] = [
+pub const PROFILE_KEYS: [&str; 23] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
-    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "settings_style", "tray_style",
+    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
@@ -176,7 +189,7 @@ mod tests {
             "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2,
             "mode": "floating", "fps": 30, "ghost": false, "auto_hide": true, "battery_auto": true, "menubar_power": true,
             "notify": { "raid": true, "pod": false }, "quiet": { "on": false, "from": "22:00", "to": "08:00" }, "follow_focus": true, "recap": true,
-            "sound": null, "shortcut": "Alt+Cmd+KeyP", "login": false, "profiles": [], "snooze_until": 0,
+            "sound": null, "shortcut": "Alt+Cmd+KeyP", "login": false, "profiles": [], "snooze_until": 0, "skin": "classic", "theme": "light",
             "settings_style": "compact", "tray_style": "menu", "onboarded": true,
         })
     }
@@ -187,11 +200,15 @@ mod tests {
         s["size"] = json!(300);
         s["ghost"] = json!(true);
         s["notify"]["raid"] = json!(false);
+        s["skin"] = json!("drawer");
+        s["theme"] = json!("dark");
         s["profiles"] = save(&s, " Work ").unwrap();
         let work = s.clone();
         s["size"] = json!(560.0);
         s["sound"] = json!(true);
         s["ghost"] = json!(false);
+        s["skin"] = json!("scouter");
+        s["theme"] = json!("auto");
         s["shortcut"] = json!("Alt+Cmd+KeyO");
         s["profiles"] = save(&s, "Play").unwrap();
         assert_eq!(names(&s), ["Work", "Play"]);
@@ -201,12 +218,29 @@ mod tests {
         assert!(p.get("shortcut").is_none() && p.get("profiles").is_none() && p.get("sound").is_none() && p.get("onboarded").is_none(), "{p}");
         crate::merge(&mut s, &p);
         assert_eq!(active(&s).as_deref(), Some("Work"));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("dark")), "a profile carries the look");
         for k in PROFILE_KEYS.iter().filter(|k| **k != "sound") {
             assert!(same(&s[*k], &work[*k]), "{k}: {} vs {}", s[*k], work[*k]);
         }
         assert_eq!(s["shortcut"], json!("Alt+Cmd+KeyO"), "not a profile's");
         s["opacity"] = json!(0.5);
         assert_eq!(active(&s), None);
+    }
+
+    #[test]
+    fn an_unknown_skin_or_theme_is_todays_look() {
+        for (skin, theme) in [(json!("manga"), json!("sepia")), (json!(3), json!(null)), (json!(""), json!(true))] {
+            let mut s = json!({ "skin": skin, "theme": theme });
+            known_look(&mut s);
+            assert_eq!(s, json!({ "skin": "classic", "theme": "light" }));
+        }
+        for skin in SKINS {
+            for theme in THEMES {
+                let mut s = json!({ "skin": skin, "theme": theme });
+                known_look(&mut s);
+                assert_eq!(s, json!({ "skin": skin, "theme": theme }), "kept");
+            }
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@
 // one of the game's own toasts says what happened meanwhile. Idle time is the OS's, read with no permission; what
 // happened is the game before and after, kept in memory for this run only.
 use crate::{planet::Core, Shown, State};
+use planet_core::big::Big;
 use serde_json::Value;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,7 +17,7 @@ const PRESENT: f64 = 30.0;
 /// The game at one moment, as far as a recap goes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snap {
-    pub pl: f64,
+    pub pl: Big,
     pub saga: u32,
     pub form: String,
     pub dragon: bool,
@@ -26,7 +27,7 @@ pub struct Snap {
 /// What happened while away, in the order the recap tells it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Happened {
-    Power(f64),
+    Power(Big),
     Beat(String),
     Form(String),
     Dragon,
@@ -54,7 +55,7 @@ pub fn happened(before: &Snap, after: &Snap, villain: impl Fn(u32) -> String) ->
 
 /// The recap's one line, or none if nothing happened: "while you were away: +2.1B power, beat frieza, the dragon is
 /// waiting". More than two villains beaten read as a count.
-pub fn summary(events: &[Happened], short: impl Fn(f64) -> String) -> Option<String> {
+pub fn summary(events: &[Happened], short: impl Fn(Big) -> String) -> Option<String> {
     let beat: Vec<&str> = events.iter().filter_map(|e| if let Happened::Beat(n) = e { Some(n.as_str()) } else { None }).collect();
     let (mut parts, mut told) = (Vec::new(), false);
     for e in events {
@@ -208,17 +209,17 @@ mod tests {
     use super::*;
 
     fn snap(pl: f64, saga: u32, form: &str, dragon: bool, ascend: bool) -> Snap {
-        Snap { pl, saga, form: form.into(), dragon, ascend }
+        Snap { pl: pl.into(), saga, form: form.into(), dragon, ascend }
     }
-    fn short(n: f64) -> String {
-        format!("{:.1}B", n / 1e9)
+    fn short(n: Big) -> String {
+        format!("{:.1}B", n.to_f64() / 1e9)
     }
     const SAGAS: [&str; 5] = ["raditz", "nappa", "vegeta", "frieza", "cell"];
 
     #[test]
     fn the_recap_tells_what_happened() {
         let events = happened(&snap(1e9, 3, "super saiyan", false, false), &snap(3.1e9, 4, "super saiyan", true, false), |i| SAGAS[i as usize].into());
-        assert_eq!(events, [Happened::Power(2.1e9), Happened::Beat("frieza".into()), Happened::Dragon]);
+        assert_eq!(events, [Happened::Power(2.1e9.into()), Happened::Beat("frieza".into()), Happened::Dragon]);
         assert_eq!(summary(&events, short).as_deref(), Some("while you were away: +2.1B power, beat frieza, the dragon is waiting"));
     }
 
@@ -226,7 +227,7 @@ mod tests {
     fn several_villains_and_a_form() {
         let events = [Happened::Beat("raditz".into()), Happened::Beat("nappa".into()), Happened::Form("super saiyan".into()), Happened::Ascend];
         assert_eq!(summary(&events, short).as_deref(), Some("while you were away: beat raditz and nappa, reached super saiyan, you can ascend"));
-        let three = [Happened::Power(5e8), Happened::Beat("a".into()), Happened::Beat("b".into()), Happened::Beat("c".into())];
+        let three = [Happened::Power(5e8.into()), Happened::Beat("a".into()), Happened::Beat("b".into()), Happened::Beat("c".into())];
         assert_eq!(summary(&three, short).as_deref(), Some("while you were away: +0.5B power, beat 3 villains"));
     }
 

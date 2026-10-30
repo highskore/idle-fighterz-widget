@@ -6,6 +6,8 @@
     on_top: 'pin float above front over windows',
     size: 'scale zoom big bigger small smaller resize large medium width',
     layout: 'dock ring pill corners strip hud position',
+    skin: 'look style design appearance hud scouter capsule corp drawer classic',
+    theme: 'dark mode light auto appearance night colour color',
     hud: 'interface overlay buttons power level show',
     fps: 'frame rate fps smooth performance cpu speed animation',
     battery_auto: 'power battery unplugged laptop energy low power mode saver',
@@ -32,8 +34,6 @@
     settings_style: 'settings window compact full wide preview tabs style',
     tray_style: 'menu bar tray popover click icon scouter quick',
     intro: 'intro onboarding welcome tutorial tips first run help again',
-    theme: 'dark light auto mode appearance colour color',
-    skin: 'look style hud design scouter capsule manga',
   };
   const words = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
   // `text`: the row's own words; `key`: its setting (for synonyms); `section`: the heading it's under

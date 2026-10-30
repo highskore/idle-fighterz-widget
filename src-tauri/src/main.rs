@@ -40,7 +40,7 @@ const DEFAULTS: &str = r#"{
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true,
-  "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [],
+  "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
   "shortcut": "Alt+Cmd+KeyP",
   "settings_style": "compact", "tray_style": "menu", "onboarded": false
 }"#;
@@ -137,6 +137,7 @@ fn initial_settings(saved: Option<&Value>) -> Value {
     if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
         settings["layout"] = json!(7); // layouts 4 and 5 were dropped
     }
+    prefs::known_look(&mut settings);
     settings
 }
 
@@ -1341,6 +1342,11 @@ mod tests {
         assert_eq!(s["size"], json!(400));
         assert_eq!((s["follow_focus"].clone(), s["recap"].clone(), s["snooze_until"].clone()), (json!(true), json!(true), json!(0)));
         assert_eq!((s["sound"].clone(), s["profiles"].clone()), (json!(null), json!([])));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "today's look");
+        let s = super::initial_settings(Some(&json!({ "skin": "drawer", "theme": "auto" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("auto")));
+        let s = super::initial_settings(Some(&json!({ "skin": "manga", "theme": "sepia" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "one this version doesn't know");
         let profiles = json!([{ "name": "Work", "settings": { "size": 300, "ghost": true } }]);
         let s = super::initial_settings(Some(&json!({ "size": 452, "sound": true, "profiles": profiles })));
         assert_eq!((s["size"].clone(), s["sound"].clone(), s["profiles"].clone()), (json!(452), json!(true), profiles));
@@ -1365,9 +1371,7 @@ mod tests {
         page.split("data-s=\"").skip(1).filter_map(|r| r.split('"').next()).filter(|k| !k.contains('$')).map(String::from).collect()
     }
 
-    // every setting the app keeps has a row in both settings windows, and neither window has a row the other lacks. A
-    // row for a key the app doesn't keep yet (skin and theme until feat/hud-skins lands: the full window shows them only
-    // once the settings have them) is the one exception, and only in the full window
+    // every setting the app keeps has a row in both settings windows, and neither window has a row the other lacks
     #[test]
     fn both_settings_windows_have_every_setting() {
         let (compact, full) = (rows(include_str!("../../settings.html")), rows(include_str!("../../settings-full.html")));
@@ -1384,10 +1388,7 @@ mod tests {
             assert!(full.contains(k), "the full settings have no row for {k}");
         }
         assert_eq!(compact.difference(&full).collect::<Vec<_>>(), Vec::<&String>::new(), "only in the compact settings");
-        let pending = ["skin", "theme"];
-        for k in full.difference(&compact) {
-            assert!(pending.contains(&k.as_str()) && !kept.contains(k), "only in the full settings: {k}");
-        }
+        assert_eq!(full.difference(&compact).collect::<Vec<_>>(), Vec::<&String>::new(), "only in the full settings");
         assert!(compact.contains("login") && full.contains("login") && full.contains("permission"));
     }
 

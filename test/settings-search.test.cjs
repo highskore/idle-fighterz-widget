@@ -38,3 +38,10 @@ test('accents and punctuation are ignored', () => {
   assert.ok(matches('click-through', 'ghost mode click-through', 'ghost', 'widget'));
   assert.ok(matches('cafe', 'café', 'x', 'y'));
 });
+
+test('the skin and theme rows have their own names', () => {
+  assert.ok(matches('dark mode', 'theme', 'theme', 'widget'));
+  assert.ok(matches('appearance', 'skin', 'skin', 'widget'));
+  assert.ok(matches('capsule corp', 'skin classic scouter capsule drawer', 'skin', 'widget'));
+  assert.ok(!matches('dark mode', 'opacity 100%', 'opacity', 'widget'));
+});
