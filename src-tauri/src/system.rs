@@ -194,6 +194,7 @@ fn watch_alt(app: AppHandle, wayland: bool) {
             if want != through {
                 if let Some(w) = app.get_webview_window("main") {
                     if w.set_ignore_cursor_events(want).is_ok() {
+                        smoke(&format!("ghost: click-through={want}"));
                         through = want;
                         app.state::<Sys>().ghosted.store(want, Relaxed);
                     }
