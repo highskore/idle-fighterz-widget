@@ -75,7 +75,8 @@ jobs:
       - name: smoke test
         shell: pwsh
         run: |
-          $scr = Resolve-Path saver/build/IdleFighterZ.scr
+          # the same binary as the .scr: started by its .scr name, the shell's verb for .scr files would replace our arguments with /S
+          $scr = Resolve-Path saver/target/release/idle-fighterz-saver.exe
           $p = Start-Process $scr -ArgumentList '/s' -PassThru
           Start-Sleep 5
           if ($p.HasExited) { throw "/s exited with $($p.ExitCode)" }
