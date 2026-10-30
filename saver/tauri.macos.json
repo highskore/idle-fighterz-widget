@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "macOS": {
+      "files": { "Resources/Idle FighterZ.saver": "../saver/build/Idle FighterZ.saver" }
+    }
+  }
+}

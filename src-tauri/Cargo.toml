@@ -28,6 +28,8 @@ rustls = { version = "=0.23.36", default-features = false, features = ["ring", "
 minisign-verify = "=0.3.0"
 sha2 = "=0.10.9"
 semver = "=1.0.28"
+# the screensaver mirrors the run over it (feature rust-core): saver/link, a local socket or pipe, nothing on disk
+saver-link = { path = "../saver/link", optional = true }
 
 # macOS notifications go through UNUserNotificationCenter directly: it asks for permission and reports it
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -53,7 +55,7 @@ default = ["rust-core", "native-renderer"]
 native-renderer = ["dep:objc2-core-foundation", "dep:objc2-core-graphics", "dep:objc2-quartz-core", "dep:png", "dep:objc2-io-surface", "dep:libc"]
 # planet-core runs the game natively and planet-render draws it, behind a HUD-only page (see NATIVE.md); without it,
 # game.js runs the game in the web view
-rust-core = ["dep:planet-core", "dep:planet-render", "dep:chrono"]
+rust-core = ["dep:planet-core", "dep:planet-render", "dep:chrono", "dep:saver-link"]
 
 [dev-dependencies]
 tauri = { version = "=2.12.1", features = ["test"] }
@@ -73,8 +75,8 @@ x11-dl = "=2.21.0"
 # the taskbar's light or dark theme, for the same
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "=0.56.0"
-# updates: whether this process runs elevated
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+# the screensaver install (its 8.3 path, and telling Windows screensavers are on), and whether updates run elevated
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 codegen-units = 1
