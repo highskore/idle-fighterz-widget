@@ -6,7 +6,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, Rect as TrayRect, WebviewUrl, 
 
 pub const LABEL: &str = "popover";
 /// the popover's size in points
-pub const SIZE: (f64, f64) = (320.0, 466.0);
+pub const SIZE: (f64, f64) = (320.0, 444.0);
 // points between the icon (or the taskbar) and the popover, and kept clear of the screen's edges
 const GAP: f64 = 6.0;
 const MARGIN: f64 = GAP;
@@ -171,6 +171,8 @@ pub fn toggle(app: &AppHandle, icon: R) {
 
 pub fn show(app: &AppHandle, icon: R) {
     let Ok(w) = window(app) else { return };
+    #[cfg(debug_assertions)]
+    eprintln!("popover: show under {icon:?}");
     let all = displays(app);
     if let Some((k, icon, screen, work)) = display_of(icon, &all) {
         let (x, y) = place(icon, SIZE, screen, work);
@@ -228,6 +230,8 @@ pub fn hide(app: &AppHandle) {
 /// it lost focus: closes, and remembers when, so the icon click that took the focus doesn't open it again
 pub fn blurred(app: &AppHandle) {
     let open = app.get_webview_window(LABEL).is_some_and(|w| w.is_visible().unwrap_or(false));
+    #[cfg(debug_assertions)]
+    eprintln!("popover: lost focus (open: {open})");
     if open {
         *app.state::<Popover>().closed.lock().unwrap() = Some(Instant::now());
         hide(app);

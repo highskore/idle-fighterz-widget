@@ -20,7 +20,7 @@ body { color: var(--ink); font: 12px/1.45 "Fragment Mono", ui-monospace, Menlo, 
 .x { position: absolute; right: 8px; top: 6px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: var(--muted); background: none; border: 0; border-radius: 50%; cursor: pointer; }
 .x:hover { color: var(--ink); background: var(--seg); }
 .x svg { width: 12px; height: 12px; }
-.body { flex: 1; display: grid; grid-template-columns: 272px 1fr; min-height: 0; }
+.body { flex: 1; display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 0; }
 
 /* the preview */
 .pv { padding: 14px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; min-height: 0; }
@@ -64,7 +64,7 @@ h4, h2 { margin: 0; font: inherit; font-size: 10px; color: var(--muted); text-tr
 .hint b { color: var(--ink); font-weight: 400; }
 
 /* the settings */
-main { display: flex; flex-direction: column; min-height: 0; }
+main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .top { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px 8px; }
 .tabs { display: flex; gap: 2px; padding: 2px; background: var(--seg); border-radius: 8px; }
 .tabs button, .seg button { font: inherit; text-transform: lowercase; padding: 3px 9px; color: var(--muted); background: none; border: 0; border-radius: 6px; cursor: pointer; }
@@ -74,7 +74,7 @@ main { display: flex; flex-direction: column; min-height: 0; }
 .find { flex: 1; min-width: 0; }
 .find input { width: 100%; font: inherit; padding: 4px 10px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 999px; outline: none; -webkit-user-select: text; user-select: text; }
 .find input:focus { border-color: var(--gold); }
-.panes { flex: 1; overflow: auto; padding: 0 18px 16px; }
+.panes { flex: 1; overflow: hidden auto; padding: 0 18px 16px; }
 .panes::-webkit-scrollbar { width: 6px; } .panes::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
 section[data-tab] { display: none; }
 section[data-tab].on, .searching section[data-tab] { display: block; }
@@ -86,7 +86,7 @@ h2 { margin: 12px 0 6px; }
 .row small { color: var(--muted); }
 .row b { font-weight: inherit; }
 .row[hidden], .miss { display: none !important; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; align-items: start; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 18px; align-items: start; }
 .seg { display: flex; gap: 2px; padding: 2px; background: var(--seg); border-radius: 8px; flex: none; }
 .seg button:disabled { opacity: .4; cursor: default; }
 input[type="checkbox"] { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: var(--track); position: relative; transition: background .15s; cursor: pointer; flex: none; }
@@ -94,7 +94,7 @@ input[type="checkbox"]::after { content: ''; position: absolute; left: 2px; top:
 input[type="checkbox"]:checked { background: var(--gold); }
 input[type="checkbox"]:checked::after { transform: translateX(12px); }
 input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-input[type="range"] { width: 120px; accent-color: var(--gold); }
+input[type="range"] { width: 110px; min-width: 60px; flex: 0 1 auto; accent-color: var(--gold); }
 input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
 .name { width: 170px; padding: 2px 8px; -webkit-user-select: text; user-select: text; }
 .pill { font: inherit; text-transform: lowercase; padding: 3px 10px; color: var(--ink); background: var(--seg); border: 0; border-radius: 999px; cursor: pointer; }
@@ -160,8 +160,8 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
   <section data-tab="look" class="on" data-name="look"><h3>look</h3>
     <h2>layout</h2>
     <div class="cards" data-s="layout" id="cards"></div>
+    <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size" style="width: 260px"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
     <div class="grid2"><div>
-      <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
       <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
       <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
       <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
@@ -174,11 +174,11 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
       <label class="row" data-s="cloud_shape"><span>cloud shape</span><select data-sel="cloud_shape"><option value="c">drifting puffs</option><option value="e">dock clouds</option><option value="a">bank</option><option value="b">halo</option><option value="d">plate</option></select></label>
       <label class="row" data-s="cloud_amount"><span>cloud amount <small id="cav"></small></span><input type="range" min="1" max="5" step="1" id="camt"></label>
       <div class="row" data-s="tray_icon" id="trayrow" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
-      <div class="row" data-s="settings_style"><span>settings window</span><div class="seg" data-seg="settings_style"><button data-v="compact">compact</button><button data-v="full">full</button></div></div>
     </div></div>
   </section>
 
   <section data-tab="play" data-name="behaviour"><h3>behaviour</h3>
+    <div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
     <div class="grid2"><div>
       <label class="row" data-s="on_top"><span>always on top</span><input type="checkbox" data-k="on_top"></label>
       <label class="row" data-s="ghost"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
@@ -186,7 +186,6 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
       <label class="row" data-s="sound"><span>game sound</span><input type="checkbox" data-k="sound"></label>
       <label class="row" data-s="recap"><span>away recap <small>a toast when back</small></span><input type="checkbox" data-k="recap"></label>
     </div><div>
-      <div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">saver</button></div></div>
       <label class="row" data-s="battery_auto"><span>saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
       <label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
       <div class="row" data-s="tray_style"><span><b class="barname">menu bar</b> click <small id="trayv"></small></span><div class="seg" data-seg="tray_style"><button data-v="menu">menu</button><button data-v="popover">popover</button></div></div>
@@ -199,7 +198,7 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
 
   <section data-tab="notify" data-name="notifications"><h3>notifications</h3>
     <div class="row" data-s="permission"><span><b id="os">macos</b> <small id="permv"></small></span><button type="button" class="pill" id="perm" hidden></button></div>
-    <div class="grid2" style="grid-template-columns: 1.25fr 1fr"><div id="nts"></div><div>
+    <div class="grid2" style="grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr)"><div id="nts"></div><div>
       <h2>preview</h2>
       <div class="toast"><img src="icon.png" alt=""><div><b id="tt"></b><span id="tb"></span></div></div>
       <h2>quiet hours</h2>
@@ -220,6 +219,7 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
   <section data-tab="about" data-name="about"><h3>about</h3>
     <div class="about"><img src="icon.png" alt=""><div><b id="appname">Idle FighterZ</b><small id="ver" style="color:var(--muted)"></small></div></div>
     <label class="row" data-s="update_check"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
+    <div class="row" data-s="settings_style"><span>settings window <small>compact: the tall single column</small></span><div class="seg" data-seg="settings_style"><button data-v="compact">compact</button><button data-v="full">full</button></div></div>
     <div class="row" data-s="intro"><span>first-run intro <small>the three tips on the widget</small></span><button type="button" class="pill" id="intro">show the intro again</button></div>
     <button type="button" class="quit" id="quit">quit</button>
   </section>
@@ -342,7 +342,8 @@ function skins() {
 // the size slider, its snap points as s / m / l
 const SNAPS = { 300: 'small', 400: 'medium', 560: 'large' };
 const showSize = v => {
-  $('szv').textContent = v + (SNAPS[v] ? ' · ' + SNAPS[v] : '') + ' · ' + (v >= 520 ? '2×' : '1×');
+  $('szv').textContent = v + ' · ' + (v >= 520 ? '2×' : '1×');
+  $('szv').title = (SNAPS[v] ? SNAPS[v] + ', ' : '') + 'points across; the pixel art is drawn ' + (v >= 520 ? '2×' : '1×') + ' (2× from 520)';
   for (const b of $('snapseg').children) b.classList.toggle('on', +b.dataset.v === v);
 };
 let slidAt = -1e9, settle = 0;

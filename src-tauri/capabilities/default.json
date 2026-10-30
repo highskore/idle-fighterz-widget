@@ -46,6 +46,7 @@
     "allow-planet-view",
     "allow-planet-pixels",
     "allow-planet-mask",
-    "allow-planet-sprite"
+    "allow-planet-sprite",
+    "allow-planet-spot"
   ]
 }

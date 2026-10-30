@@ -476,13 +476,19 @@ async fn open_settings(app: AppHandle) -> tauri::Result<()> {
     w.set_focus()
 }
 
-// the settings style changed: an open settings window becomes the other one, resized and centred where it is
+// the settings style changed: an open settings window becomes the other one, resized and centred
 fn restyle_settings(app: &AppHandle, style: &Value) {
     let Some(w) = app.get_webview_window("settings") else { return };
     let (page, width, height) = prefs::settings_page(style);
     let Ok(url) = w.url().and_then(|u| u.join(page).map_err(|e| tauri::Error::Anyhow(e.into()))) else { return };
     let _ = w.set_size(LogicalSize::new(width, height));
-    let _ = w.center();
+    // centred by its new size: center() may still see the old one
+    if let Ok(Some(m)) = w.current_monitor() {
+        let (a, k) = (m.work_area(), m.scale_factor());
+        let x = a.position.x as f64 + (a.size.width as f64 - width * k).max(0.0) / 2.0;
+        let y = a.position.y as f64 + (a.size.height as f64 - height * k).max(0.0) / 2.0;
+        let _ = w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    }
     let _ = w.navigate(url);
 }
 
@@ -1039,13 +1045,18 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-// the native menu, under the icon, for a ⌃-click while the icon opens the popover (macOS has no right-click on some
-// trackpads): popped up from the hidden popover window, put where the menu should open
+// the native menu, under the icon, for a ⌃-click while the icon opens the popover (a trackpad may have no right-click):
+// popped up from the popover's window, shrunk to a point where the menu should open (AppKit pops a menu up only from
+// a window on screen). The popup returns once the menu closes
 #[cfg(target_os = "macos")]
 fn tray_menu_at(app: &AppHandle, icon: popover::R) {
     let menu = app.state::<State>().tray.lock().unwrap().as_ref().map(|t| t.menu.clone());
     let (Some(menu), Some(w)) = (menu, popover::anchor_for_menu(app, icon)) else { return };
+    let _ = w.set_size(LogicalSize::new(1.0, 1.0));
+    let _ = w.show();
     let _ = w.popup_menu_at(&menu, tauri::LogicalPosition::new(0.0, 0.0));
+    let _ = w.hide();
+    let _ = w.set_size(LogicalSize::new(popover::SIZE.0, popover::SIZE.1));
 }
 
 // The tray menu's items, by id; the popover's items call the same
@@ -1107,13 +1118,18 @@ fn menu_action(app: AppHandle, id: &str) {
 // under the menu bar's right end if the icon isn't shown
 #[cfg(debug_assertions)]
 fn debug_open(app: &AppHandle) {
-    let Ok(what) = std::env::var("IDLE_FIGHTERZ_DEBUG_OPEN") else { return };
+    let Some(what) = std::env::var("IDLE_FIGHTERZ_DEBUG_OPEN").ok().filter(|w| !w.is_empty()) else { return };
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(3));
         let h = app.clone();
         let _ = app.run_on_main_thread(move || {
-            let icon = h.tray_by_id("tray").and_then(|t| t.rect().ok().flatten()).map(|r| popover::icon_rect(&r)).filter(|r| r.w > 0.0).unwrap_or_else(|| {
+            // IDLE_FIGHTERZ_DEBUG_ICON=x,y,w,h (physical pixels) stands in for the icon's rect
+            let given = std::env::var("IDLE_FIGHTERZ_DEBUG_ICON").ok().and_then(|v| {
+                let n: Vec<f64> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                (n.len() == 4).then(|| popover::R { x: n[0], y: n[1], w: n[2], h: n[3] })
+            });
+            let icon = given.or_else(|| h.tray_by_id("tray").and_then(|t| t.rect().ok().flatten()).map(|r| popover::icon_rect(&r)).filter(|r| r.w > 0.0)).unwrap_or_else(|| {
                 let m = h.primary_monitor().ok().flatten();
                 let (w, s) = m.as_ref().map_or((1440.0, 1.0), |m| (m.size().width as f64, m.scale_factor()));
                 popover::R { x: w - 260.0 * s, y: 0.0, w: 30.0 * s, h: 24.0 * s }
@@ -1123,10 +1139,21 @@ fn debug_open(app: &AppHandle) {
                 "popover" => popover::show(&h, icon),
                 #[cfg(target_os = "macos")]
                 "menu" => tray_menu_at(&h, icon),
+                // "settings", "settings:<tab>" (the full window's look, play, notify, keys or about), or "settings:switch"
+                // (the other settings style, picked in the window)
                 _ => {
                     let h = h.clone();
+                    let tab = what.split_once(':').map(|(_, t)| t.replace(|c: char| !c.is_ascii_alphabetic(), ""));
                     tauri::async_runtime::spawn(async move {
-                        let _ = open_settings(h).await;
+                        let _ = open_settings(h.clone()).await;
+                        if let (Some(tab), Some(w)) = (tab, h.get_webview_window("settings")) {
+                            std::thread::sleep(Duration::from_secs(2));
+                            let _ = w.eval(if tab == "switch" {
+                                "set({ settings_style: document.querySelector('[data-seg=settings_style] .on')?.dataset.v === 'full' ? 'compact' : 'full' })".to_string()
+                            } else {
+                                format!("document.querySelector('#tabs [data-t={tab}]')?.click()")
+                            });
+                        }
                     });
                 }
             }
@@ -1382,7 +1409,7 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
         for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save", "glance", "preview_frame", "tray_action", "hide_popover"] {

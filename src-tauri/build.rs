@@ -10,7 +10,7 @@ const COMMANDS: &[&str] = &[
     "planet_pointer_cancel", "planet_key", "planet_train", "planet_kaioken", "planet_buy", "planet_learn", "planet_respec",
     "planet_learn_angel", "planet_auto_next", "planet_pick_wish", "planet_pick_hero", "planet_menu", "planet_angels",
     "planet_ascend_info", "planet_god_info", "planet_zeno_info", "planet_card", "planet_fps", "planet_itx", "planet_itx_jump",
-    "planet_view", "planet_pixels", "planet_mask", "planet_sprite",
+    "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot",
 ];
 
 fn main() {
