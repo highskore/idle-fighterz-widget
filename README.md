@@ -25,7 +25,8 @@ Your hero runs laps around a pixel-art planet, powers up while you work, and fig
 - **Plays itself.** Your hero keeps training while you work. Click to train harder, drag to spin the planet, hold to charge a beam.
 - **Notifications that matter.** Villain raids, the dragon, trips and ascends can each notify you, with quiet hours, and never while you're looking at the widget.
 - **Light on your machine.** The game runs natively, in Rust, and on macOS its frames go straight to the screen under the widget's HUD. It draws at 30 fps, and you can switch to battery saver. Hidden, it draws nothing and pauses, or ticks along at under 1% of one core if you want notifications or the menu-bar number.
-- **Yours to tweak.** Size, HUD layout, clouds, opacity, always-on-top, launch at login and a global show/hide shortcut.
+- **Yours to tweak.** Size, HUD layout, clouds, opacity, always-on-top, launch at login and a global show/hide shortcut. Settings come compact, or full: wider, in tabs, with a live preview of the widget over a light, dark or your own wallpaper.
+- **A popover in the menu bar, if you like.** Click the scouter for your power, form, next goal, dragon balls, quick toggles and the size. Right-click (or <kbd>⌃</kbd>-click) still opens the menu. macOS and Windows.
 
 ## Install
 
@@ -69,6 +70,7 @@ This installs the AppImage to `~/.local/bin/idle-fighterz`, with a menu entry. O
 - AppImages need FUSE 2: `sudo apt install libfuse2` (`libfuse2t64` on Ubuntu 24.04).
 - **Floating needs a compositor.** Every Wayland desktop has one, as do GNOME, KDE and Xfce on X11. Without one, the widget stays in window mode.
 - **The tray icon needs AppIndicator support.** KDE, Xfce, Cinnamon and Ubuntu have it built in. On stock GNOME, install the *AppIndicator and KStatusNotifierItem Support* extension. The power level shows as the tray menu's first item, and as a label beside the icon where the panel supports it (GNOME's extension does, KDE Plasma doesn't).
+- **The tray only opens its menu.** AppIndicator reports no clicks, so the menu-bar popover isn't available, and settings says so.
 - **On Wayland there is no global shortcut**: it's an X11 key grab, so settings shows "not on wayland" in its place. Instead, bind a desktop shortcut to `idle-fighterz`: launching it again shows the running widget.
 
 </details>
@@ -84,7 +86,7 @@ All installers verify downloads against the release's `SHA256SUMS`, and that fil
 | Train | Click the planet | Click the planet |
 | Settings | The gear, or the menu-bar icon | The gear, or the tray icon |
 
-You can change the shortcut, or turn it off, in settings. If the menu-bar icon is hidden (a notch, a menu-bar manager), everything still works: open the app again and the widget comes back.
+The first launch shows three quick tips on the widget; settings can show them again. You can change the shortcut, or turn it off, in settings. If the menu-bar icon is hidden (a notch, a menu-bar manager), everything still works: open the app again and the widget comes back.
 
 Progress isn't saved between launches, just like on [highskore.com](https://highskore.com). Your settings are kept.
 

@@ -90,6 +90,9 @@ main::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 3px; }
 <label class="row" data-s="recap"><span>away recap <small>a toast when you're back</small></span><input type="checkbox" data-k="recap"></label>
 <label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 <label class="row" data-s="update_check"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
+<div class="row" data-s="tray_style"><span><b class="barname">menu bar</b> click <small id="trayv"></small></span><div class="seg" data-seg="tray_style"><button data-v="menu">menu</button><button data-v="popover">popover</button></div></div>
+<div class="row" data-s="settings_style"><span>settings window</span><div class="seg" data-seg="settings_style"><button data-v="compact">compact</button><button data-v="full">full</button></div></div>
+<div class="row" data-s="intro"><span>first-run intro</span><button type="button" class="pill" id="intro">show again</button></div>
 
 <h2>profiles</h2>
 <div id="profiles"></div>
@@ -130,6 +133,10 @@ function render(v) {
   if (!recording) showKey();
   $('os').textContent = MAC ? 'macos' : s.os === 'windows' ? 'windows' : 'system';
   $('bar').textContent = MAC ? 'menu bar' : 'tray';
+  document.querySelectorAll('.barname').forEach(b => { b.textContent = MAC ? 'menu bar' : 'tray'; });
+  // a click on the icon opens the popover (right-click: the menu); linux's tray reports no clicks, so only the menu
+  document.querySelector('[data-seg="tray_style"] [data-v="popover"]').disabled = !s.popover_ok;
+  $('trayv').textContent = s.popover_ok ? (s.tray_style === 'popover' ? 'right-click: menu' : '') : 'not on linux';
   // macOS tints its template icon itself; Windows and Linux pick white or black (auto follows the taskbar)
   $('trayrow').hidden = MAC;
   // balanced drops to battery saver on battery or in low power mode (main.rs); an explicit pick stays
@@ -255,6 +262,7 @@ $('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity
 $('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));
 for (const k of ['from', 'to']) $(k).addEventListener('change', () => set({ quiet: { [k]: $(k).value } }));
 $('quit').addEventListener('click', () => invoke('quit'));
+$('intro').addEventListener('click', () => set({ onboarded: false }));
 const close = () => window.__TAURI__.window.getCurrentWindow().close();
 $('close').addEventListener('click', close);
 addEventListener('keydown', e => { if (e.key === 'Escape' || ((MAC ? e.metaKey : e.ctrlKey) && e.key === 'w')) close(); });

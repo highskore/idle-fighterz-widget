@@ -25,13 +25,32 @@ pub fn size(v: &Value) -> f64 {
     }
 }
 
-/// a saved file from before the slider: its preset name becomes the number it stood for
+/// A saved file from an older version: a size preset name becomes the number it stood for. Any file at all means the
+/// widget has been met already, so the first-run card doesn't show (0.2.x had none, and no `onboarded`)
 pub fn migrate(saved: &Value) -> Value {
     let mut saved = saved.clone();
     if let Some(v) = saved.get("size").filter(|v| v.is_string()).cloned() {
         saved["size"] = json!(size(&v) as u64);
     }
+    if saved.is_object() && saved.get("onboarded").is_none() {
+        saved["onboarded"] = json!(true);
+    }
     saved
+}
+
+/// The settings window for `settings_style`: its page and size in points. "compact" (the default, and anything
+/// unknown) is the tall single column; "full" the wide one with tabs and a live preview
+pub fn settings_page(style: &Value) -> (&'static str, f64, f64) {
+    match style.as_str() {
+        Some("full") => ("settings-full.html", 820.0, 580.0),
+        _ => ("settings.html", 400.0, 918.0),
+    }
+}
+
+/// whether a click on the menu-bar icon opens the popover: `tray_style` "popover", where the tray reports clicks (not
+/// Linux, whose AppIndicator only opens menus)
+pub fn popover(style: &Value) -> bool {
+    style.as_str() == Some("popover") && cfg!(not(target_os = "linux"))
 }
 
 /// the HUD skins and themes the widget page knows (game/skins.js); anything else reads as today's look
@@ -47,11 +66,11 @@ pub fn known_look(s: &mut Value) {
     }
 }
 
-/// what a profile keeps: how the widget looks and behaves. Not the shortcut, login, updates, the tray icon's colour,
-/// a snooze, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 21] = [
+/// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
+/// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
+pub const PROFILE_KEYS: [&str; 23] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
-    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme",
+    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
@@ -122,9 +141,9 @@ mod tests {
         assert_eq!([size(&json!("small")), size(&json!("medium")), size(&json!("large"))], [300.0, 400.0, 560.0]);
         assert_eq!(size(&json!("huge")), 400.0, "an unknown name is medium");
         assert_eq!(size(&Value::Null), 400.0);
-        assert_eq!(migrate(&json!({ "size": "large", "on_top": false })), json!({ "size": 560, "on_top": false }));
-        assert_eq!(migrate(&json!({ "size": 450 })), json!({ "size": 450 }), "a number stays");
-        assert_eq!(migrate(&json!({ "on_top": true })), json!({ "on_top": true }));
+        assert_eq!(migrate(&json!({ "size": "large", "on_top": false }))["size"], json!(560));
+        assert_eq!(migrate(&json!({ "size": 450 }))["size"], json!(450), "a number stays");
+        assert_eq!(migrate(&json!({ "on_top": true })), json!({ "on_top": true, "onboarded": true }));
     }
 
     #[test]
@@ -143,12 +162,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn any_old_file_has_met_the_widget_and_a_saved_answer_stays() {
+        assert_eq!(migrate(&json!({}))["onboarded"], json!(true));
+        assert_eq!(migrate(&json!({ "onboarded": false }))["onboarded"], json!(false), "asked for the intro again");
+        assert_eq!(migrate(&json!({ "onboarded": true }))["onboarded"], json!(true));
+        assert_eq!(migrate(&json!("junk")), json!("junk"), "not an object: left for merge to ignore");
+    }
+
+    #[test]
+    fn the_settings_style_picks_the_window() {
+        assert_eq!(settings_page(&json!("compact")), ("settings.html", 400.0, 918.0));
+        assert_eq!(settings_page(&json!("full")), ("settings-full.html", 820.0, 580.0));
+        assert_eq!(settings_page(&json!("fancy")).0, "settings.html", "unknown: compact");
+        assert_eq!(settings_page(&Value::Null).0, "settings.html");
+    }
+
+    #[test]
+    fn the_popover_is_only_where_the_tray_reports_clicks() {
+        assert_eq!(popover(&json!("popover")), cfg!(not(target_os = "linux")));
+        assert!(!popover(&json!("menu")) && !popover(&json!("other")) && !popover(&Value::Null));
+    }
+
     fn settings() -> Value {
         json!({
             "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2,
             "mode": "floating", "fps": 30, "ghost": false, "auto_hide": true, "battery_auto": true, "menubar_power": true,
             "notify": { "raid": true, "pod": false }, "quiet": { "on": false, "from": "22:00", "to": "08:00" }, "follow_focus": true, "recap": true,
             "sound": null, "shortcut": "Alt+Cmd+KeyP", "login": false, "profiles": [], "snooze_until": 0, "skin": "classic", "theme": "light",
+            "settings_style": "compact", "tray_style": "menu", "onboarded": true,
         })
     }
 
@@ -173,7 +215,7 @@ mod tests {
         assert_eq!(active(&s).as_deref(), Some("Play"));
 
         let p = find(&s, "work").unwrap();
-        assert!(p.get("shortcut").is_none() && p.get("profiles").is_none() && p.get("sound").is_none(), "{p}");
+        assert!(p.get("shortcut").is_none() && p.get("profiles").is_none() && p.get("sound").is_none() && p.get("onboarded").is_none(), "{p}");
         crate::merge(&mut s, &p);
         assert_eq!(active(&s).as_deref(), Some("Work"));
         assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("dark")), "a profile carries the look");

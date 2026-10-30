@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "the settings window: draws its own title bar (drags and closes itself), hears settings and permission events, and reads and changes the settings",
+  "description": "the settings window (compact or full): draws its own title bar (drags and closes itself), hears settings and permission events, and reads and changes the settings; the full one's preview reads the widget's last frame and the game at a glance",
   "windows": ["settings"],
   "permissions": [
     "core:window:allow-start-dragging",
@@ -18,6 +18,8 @@
     "allow-save-profile",
     "allow-delete-profile",
     "allow-apply-profile",
-    "allow-quit"
+    "allow-quit",
+    "allow-glance",
+    "allow-preview-frame"
   ]
 }

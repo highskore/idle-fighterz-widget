@@ -362,6 +362,18 @@ impl Core {
         .ok()
     }
 
+    /// The game at a glance, for the menu-bar popover and the settings preview: the HUD as `ui.update` gets it, with
+    /// how many upgrades are affordable and the world's name.
+    pub fn glance(&self) -> Option<String> {
+        self.with(|b| {
+            let ready = b.game.shop().iter().filter(|r| r.can).count();
+            let world = planet_core::hud::WORLD_FULL.get(b.game.hud.world as usize).copied().unwrap_or("");
+            let hud = b.game.hud.to_json();
+            format!("{{\"hud\":{hud},\"ready\":{ready},\"world\":{}}}", serde_json::Value::from(world))
+        })
+        .ok()
+    }
+
     pub fn can_ascend(&self) -> bool {
         self.with(|b| can_ascend(&b.game)).unwrap_or(false)
     }
@@ -776,6 +788,16 @@ pub fn planet_zeno_info(core: State<'_, Core>) -> Result<String, String> {
     core.with(|b| b.game.zeno_info_json())
 }
 
+/// Where the planet is drawn now: its centre and radius in buffer pixels (the camera the renderer and the hit tests use,
+/// shake included), and the buffer's size, for the page to map onto its canvas (the first-run card's ring).
+#[tauri::command]
+pub fn planet_spot(core: State<'_, Core>) -> Result<String, String> {
+    core.with(|b| {
+        let c = &b.game.cam;
+        format!("{{\"cx\":{},\"cy\":{},\"r\":{},\"w\":{},\"h\":{}}}", c.cx, c.cy + c.bob, c.r, c.w, c.h)
+    })
+}
+
 #[tauri::command]
 pub fn planet_card(core: State<'_, Core>) -> Result<String, String> {
     core.with(|b| b.game.card_json())
@@ -792,7 +814,8 @@ macro_rules! planet_commands {
             crate::planet::planet_auto_next, crate::planet::planet_pick_wish, crate::planet::planet_pick_hero, crate::planet::planet_menu,
             crate::planet::planet_angels, crate::planet::planet_ascend_info, crate::planet::planet_god_info, crate::planet::planet_zeno_info,
             crate::planet::planet_card, crate::planet::planet_fps, crate::planet::planet_view, crate::planet::planet_pixels,
-            crate::planet::planet_mask, crate::planet::planet_sprite, crate::planet::planet_itx, crate::planet::planet_itx_jump
+            crate::planet::planet_mask, crate::planet::planet_sprite, crate::planet::planet_itx, crate::planet::planet_itx_jump,
+            crate::planet::planet_spot
         ]
     };
 }
@@ -1035,6 +1058,62 @@ mod tests {
             assert!(t.elapsed() < Duration::from_secs(5), "the screensaver went, the hub should hear it");
             core.saver_tick(DT, 1.7e12, &mut kept, &mut ascend);
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // the first-run card rings the planet where planet_spot says it is: at every widget size (1× below 520 points, 2×
+    // from there, as world.js sizes the buffer), the disc drawn has that centre and radius, to within 2 pixels
+    #[test]
+    fn the_spot_is_where_the_planet_is_drawn() {
+        for size in [300.0, 340.0, 400.0, 452.0, 518.0, 520.0, 560.0, 640.0, 720.0f64] {
+            let (app, w) = app(file(&format!("spot{size}")));
+            let core = app.state::<Core>();
+            let scale = if size >= 520.0 { 2.0 } else { 1.0 };
+            let side = (size / scale).ceil();
+            call(&w, "resize", json!({ "w": side, "h": side, "scale": scale }));
+            let args = json!({ "bare": true, "clouds": "", "amount": 2.0, "calm": true, "x": 0.0, "y": 0.0, "w": size, "h": size, "opacity": 1.0 });
+            call(&w, "view", args);
+            call(&w, "start", json!({ "today": "Wed Oct 28 2026", "now_ms": 1.7e12 }));
+            for i in 0..40 {
+                core.tick(DT, 1.7e12 + i as f64 * 33.0);
+            }
+            let spot: Value = serde_json::from_str(call(&w, "spot", json!({})).as_str().unwrap()).unwrap();
+            let (cx, cy, r) = (spot["cx"].as_f64().unwrap(), spot["cy"].as_f64().unwrap(), spot["r"].as_f64().unwrap());
+            assert_eq!((spot["w"].as_f64(), spot["h"].as_f64()), (Some(side), Some(side)));
+            let (rgba, fw, fh, _) = core.frame().unwrap();
+            let solid = |x: f64, y: f64| {
+                let (x, y) = (x.round() as i64, y.round() as i64);
+                x >= 0 && y >= 0 && x < fw as i64 && y < fh as i64 && rgba[(y as usize * fw as usize + x as usize) * 4 + 3] > 0
+            };
+            // how far the drawing reaches from the centre in 32 directions: trees, huts and the hero only reach further,
+            // so the nearest edge is the disc's
+            let reach: Vec<f64> = (0..32)
+                .map(|k| {
+                    let a = k as f64 * std::f64::consts::PI / 16.0;
+                    let mut d = 0.0;
+                    while solid(cx + (d + 0.5) * a.cos(), cy + (d + 0.5) * a.sin()) && d < side {
+                        d += 0.5;
+                    }
+                    d
+                })
+                .collect();
+            // the disc's edge (its outline and the floating rim included) is where most directions stop
+            let edge = |d: f64| d >= r - 2.0 && d <= r + 3.0;
+            let near = reach.iter().cloned().fold(f64::MAX, f64::min);
+            assert!(near >= r - 2.0, "{size} pt: the disc stops at {near}, inside r = {r}");
+            let rims: Vec<f64> = reach.iter().cloned().filter(|d| edge(*d)).collect();
+            let drawn = rims.iter().sum::<f64>() / rims.len() as f64;
+            assert!(rims.len() >= 16 && (drawn - r).abs() <= 2.0, "{size} pt: the disc is {drawn} across {} directions, the spot says r = {r}", rims.len());
+            // the centre: across each pair of opposite directions both at the disc's edge, the middle is the centre
+            let mut pairs = 0;
+            for k in 0..16 {
+                let (a, b) = (reach[k], reach[k + 16]);
+                if edge(a) && edge(b) {
+                    pairs += 1;
+                    assert!((a - b).abs() / 2.0 <= 2.0, "{size} pt: off centre along direction {k}: {a} vs {b}");
+                }
+            }
+            assert!(pairs >= 3, "{size} pt: only {pairs} clear diameters: {reach:?}");
         }
     }
 

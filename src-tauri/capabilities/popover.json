@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popover",
+  "description": "the menu-bar popover: hears settings and its own open and close, reads the game at a glance, flips the quick toggles, and runs the tray menu's items",
+  "windows": ["popover"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-glance",
+    "allow-tray-action",
+    "allow-hide-popover"
+  ]
+}
