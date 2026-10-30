@@ -94,18 +94,54 @@ mod win {
             RegisterClassW(&wc);
             let full = matches!(mode, Mode::Screen);
             APP.with(|a| {
-                *a.borrow_mut() = Some(App { saver: Saver::new(), bgr: Vec::new(), w: 0, h: 0, power: String::new(), full, at: None, font: std::ptr::null_mut(), font_px: 0 });
+                *a.borrow_mut() = Some(App {
+                    saver: Saver::new(),
+                    bgr: Vec::new(),
+                    w: 0,
+                    h: 0,
+                    power: String::new(),
+                    full,
+                    at: None,
+                    font: std::ptr::null_mut(),
+                    font_px: 0,
+                });
             });
             let hwnd = match mode {
                 Mode::Preview(parent) => {
                     let mut r: RECT = std::mem::zeroed();
                     GetClientRect(parent, &mut r);
-                    CreateWindowExW(0, class.as_ptr(), std::ptr::null(), WS_CHILD | WS_VISIBLE, 0, 0, r.right - r.left, r.bottom - r.top, parent, std::ptr::null_mut(), inst, std::ptr::null())
+                    CreateWindowExW(
+                        0,
+                        class.as_ptr(),
+                        std::ptr::null(),
+                        WS_CHILD | WS_VISIBLE,
+                        0,
+                        0,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        parent,
+                        std::ptr::null_mut(),
+                        inst,
+                        std::ptr::null(),
+                    )
                 }
                 _ => {
                     let (x, y) = (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
                     let (w, h) = (GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
-                    let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, class.as_ptr(), wide("Idle FighterZ").as_ptr(), WS_POPUP | WS_VISIBLE, x, y, w, h, std::ptr::null_mut(), std::ptr::null_mut(), inst, std::ptr::null());
+                    let hwnd = CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                        class.as_ptr(),
+                        wide("Idle FighterZ").as_ptr(),
+                        WS_POPUP | WS_VISIBLE,
+                        x,
+                        y,
+                        w,
+                        h,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        inst,
+                        std::ptr::null(),
+                    );
                     ShowCursor(0);
                     hwnd
                 }
@@ -261,7 +297,22 @@ mod win {
                 DeleteObject(app.font);
             }
             let face = wide("Segoe UI");
-            app.font = CreateFontW(-px, 0, 0, 0, FW_SEMIBOLD as i32, 0, 0, 0, DEFAULT_CHARSET as u32, OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32, CLEARTYPE_QUALITY as u32, (DEFAULT_PITCH | FF_DONTCARE) as u32, face.as_ptr());
+            app.font = CreateFontW(
+                -px,
+                0,
+                0,
+                0,
+                FW_SEMIBOLD as i32,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                OUT_DEFAULT_PRECIS as u32,
+                CLIP_DEFAULT_PRECIS as u32,
+                CLEARTYPE_QUALITY as u32,
+                (DEFAULT_PITCH | FF_DONTCARE) as u32,
+                face.as_ptr(),
+            );
             app.font_px = px;
         }
         let old = SelectObject(dc, app.font);

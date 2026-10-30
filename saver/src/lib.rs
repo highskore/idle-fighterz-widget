@@ -72,7 +72,13 @@ impl Saver {
 
     /// `None`: demo only.
     pub fn with(ep: Option<Endpoint>) -> Saver {
-        let shared = Arc::new(Shared { latest: Mutex::new(None), got: Mutex::new(None), polled: AtomicU64::new(0), stop: AtomicBool::new(false), epoch: Instant::now() });
+        let shared = Arc::new(Shared {
+            latest: Mutex::new(None),
+            got: Mutex::new(None),
+            polled: AtomicU64::new(0),
+            stop: AtomicBool::new(false),
+            epoch: Instant::now(),
+        });
         if let Some(ep) = ep {
             let s = shared.clone();
             let _ = std::thread::Builder::new().name("saver-link".into()).spawn(move || follow(&s, &ep));
@@ -283,17 +289,16 @@ mod tests {
         }
     }
 
+    static N: AtomicU64 = AtomicU64::new(0);
+
     fn test_endpoint() -> Endpoint {
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let key = std::env::temp_dir().join(format!("ifz-saver-test-{}-{n}", std::process::id())).join("key");
         #[cfg(windows)]
-        {
-            static N: AtomicU64 = AtomicU64::new(0);
-            Endpoint::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-libtest-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
-        }
+        let at = saver_link::Addr::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-libtest-{}-{n}", std::process::id()));
         #[cfg(not(windows))]
-        {
-            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-            Endpoint::Tcp(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
-        }
+        let at = saver_link::Addr::Tcp(vec![std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()]);
+        Endpoint { at, key }
     }
 
     #[test]
@@ -351,20 +356,22 @@ mod tests {
     }
 
     #[test]
-    fn a_garbled_widget_means_the_demo() {
+    fn a_widget_that_cant_prove_itself_means_the_demo() {
         #[cfg(not(windows))]
         {
             use std::io::{Read, Write};
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let ep = Endpoint::Tcp(vec![l.local_addr().unwrap()]);
+            let ep = Endpoint { at: saver_link::Addr::Tcp(vec![l.local_addr().unwrap()]), key: test_endpoint().key };
+            saver_link::new_key(&ep.key).unwrap();
             std::thread::spawn(move || {
                 for c in l.incoming() {
                     let Ok(mut c) = c else { continue };
-                    let mut h = [0u8; saver_link::HELLO_LEN];
+                    let mut h = [0u8; saver_link::HELLO_LEN + 16];
                     let _ = c.read_exact(&mut h);
+                    // our hello, a nonce and a made-up proof, then a frame
                     let _ = c.write_all(&saver_link::hello(saver_link::user()));
-                    // a frame whose runs overflow it
-                    let _ = c.write_all(&[1, 12, 0, 0, 0, 1, 0, 1, 0, 1, 0, 9, 0, 1, 2, 3, 4]);
+                    let _ = c.write_all(&[3; 48]);
+                    let _ = c.write_all(&saver_link::encode_frame(&[255; 4], 1, 1, "fake").unwrap());
                 }
             });
             let mut s = Saver::with(Some(ep));

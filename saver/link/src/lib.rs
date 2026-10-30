@@ -1,10 +1,12 @@
 //! The screensaver's live view of the widget's run. The widget is the server (`Hub`): while a screensaver is connected
 //! it draws every step and sends each frame; the screensaver (`Client`) shows them, and falls back to a demo run of its
-//! own on any error. Nothing touches the disk. See saver/README.md.
+//! own on any error. The run never touches the disk; the only file is the link's key. See saver/README.md.
 //!
 //! Wire format, all integers little-endian:
-//! - hello, both ways (the screensaver first): `"IFZS"`, version `u16`, flags `u16` (0), user `u32` (the uid on
-//!   macOS, 0 on Windows, where the pipe's name is per user)
+//! - the handshake. Screensaver: hello (`"IFZS"`, version `u16`, flags `u16` (0), user `u32`: the uid on macOS, 0 on
+//!   Windows) and a 16-byte nonce. Widget: its hello, its nonce, and HMAC-SHA256(key, "IFZS widget" ‖ both nonces).
+//!   Screensaver: HMAC-SHA256(key, "IFZS saver" ‖ both nonces). The key is 32 random bytes the widget writes at launch
+//!   where only the user can read them (`endpoint`); either side drops a peer that can't prove it, within 2 s
 //! - then server to screensaver only, messages: kind `u8`, payload length `u32`, payload. Kind 1 is a frame: width
 //!   `u16`, height `u16`, encoding `u8`, power length `u8`, the power level (UTF-8), then the pixels: RGBA8 rows top to
 //!   bottom (encoding 0), or runs of `count u16` + one RGBA8 pixel (encoding 1). Other kinds are skipped.
@@ -39,6 +41,8 @@ pub enum Error {
     Magic,
     Version(u16),
     User,
+    /// the other end doesn't hold this user's key (or ours can't be read)
+    Auth,
     TooBig(usize),
     Bad(&'static str),
 }
@@ -209,8 +213,9 @@ pub fn read_frame(r: &mut impl Read) -> Result<Frame, Error> {
     }
 }
 
-// ── transport: TCP on loopback (the macOS screensaver host's sandbox allows network clients, nothing else of ours),
-// a named pipe on Windows
+// ── transport: TCP on loopback (the macOS screensaver host's sandbox allows network clients and nothing else of
+// ours), a named pipe on Windows. Neither says who is at the other end, so both sides prove they hold this user's key
+// (a random file only the user can read, new each time the widget starts) before a frame moves
 
 #[cfg(not(windows))]
 pub type Conn = std::net::TcpStream;
@@ -219,11 +224,18 @@ pub type Conn = std::fs::File;
 
 /// Where the widget listens.
 #[derive(Clone, Debug)]
-pub enum Endpoint {
+pub enum Addr {
     #[cfg(not(windows))]
     Tcp(Vec<std::net::SocketAddr>),
     #[cfg(windows)]
     Pipe(String),
+}
+
+/// Where the widget listens, and the key both sides prove they hold.
+#[derive(Clone, Debug)]
+pub struct Endpoint {
+    pub at: Addr,
+    pub key: std::path::PathBuf,
 }
 
 /// This user's uid (macOS, Linux), 0 on Windows.
@@ -240,50 +252,199 @@ pub fn user() -> u32 {
     0
 }
 
-/// This user's endpoint: four loopback ports picked by uid (below macOS's ephemeral range), or a pipe named for the user.
+// the user's own home: inside the screensaver host's sandbox HOME is its container, under the home
+#[cfg(not(windows))]
+fn home() -> std::path::PathBuf {
+    let h = std::env::var("HOME").unwrap_or_default();
+    let real = h.find("/Library/Containers/").map_or(h.as_str(), |i| &h[..i]);
+    std::path::PathBuf::from(real)
+}
+
+/// This user's endpoint. macOS: four loopback ports picked by uid (below the ephemeral range), the key in
+/// `~/Library/Application Support/com.highskore.idlefighterz.saver/key`, which the screensaver's sandbox can read.
+/// Windows: a pipe named for the user's SID, the key in `%LOCALAPPDATA%\IdleFighterZ\saver.key`.
 pub fn endpoint() -> Endpoint {
     #[cfg(windows)]
     {
-        let who: String = std::env::var("USERNAME").unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-        Endpoint::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-{who}"))
+        let who = pipe::user_sid()
+            .unwrap_or_else(|| std::env::var("USERNAME").unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect());
+        let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_default();
+        Endpoint { at: Addr::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-{who}")), key: local.join(r"IdleFighterZ\saver.key") }
     }
     #[cfg(not(windows))]
     {
         let base = 41000 + (user() % 2000) as u16 * 4;
-        Endpoint::Tcp((base..base + 4).map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p))).collect())
+        Endpoint {
+            at: Addr::Tcp((base..base + 4).map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p))).collect()),
+            key: home().join("Library/Application Support/com.highskore.idlefighterz.saver/key"),
+        }
     }
 }
 
-fn timeouts(c: &Conn, d: Option<Duration>) {
+pub const KEY_LEN: usize = 32;
+const NONCE: usize = 16;
+const MAC: usize = 32;
+/// how long either side waits for the other's half of the handshake
+const SHAKE: Duration = Duration::from_secs(2);
+
+type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+
+fn mac(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8]) -> HmacSha256 {
+    use hmac::Mac;
+    let mut m = HmacSha256::new_from_slice(key).expect("any key length");
+    m.update(role);
+    m.update(nc);
+    m.update(ns);
+    m
+}
+
+fn tag(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8]) -> [u8; MAC] {
+    use hmac::Mac;
+    mac(key, role, nc, ns).finalize().into_bytes().into()
+}
+
+// constant time
+fn check(key: &[u8; KEY_LEN], role: &[u8], nc: &[u8], ns: &[u8], got: &[u8]) -> Result<(), Error> {
+    use hmac::Mac;
+    mac(key, role, nc, ns).verify_slice(got).map_err(|_| Error::Auth)
+}
+
+fn nonce() -> Result<[u8; NONCE], Error> {
+    let mut n = [0u8; NONCE];
+    getrandom::fill(&mut n).map_err(|_| Error::Auth)?;
+    Ok(n)
+}
+
+/// The widget's side: a new random key, written where only this user can read it (0600 in a 0700 folder), replacing
+/// the last one.
+pub fn new_key(path: &std::path::Path) -> io::Result<[u8; KEY_LEN]> {
+    let mut k = [0u8; KEY_LEN];
+    getrandom::fill(&mut k).map_err(|e| io::Error::other(e.to_string()))?;
+    let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = path.with_extension("new");
+    let _ = std::fs::remove_file(&tmp);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        o.mode(0o600);
+    }
+    o.open(&tmp)?.write_all(&k)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(k)
+}
+
+/// The screensaver's side: the key, if it's a regular file of the right size that this user owns and no one else can
+/// read or write.
+pub fn read_key(path: &std::path::Path) -> Result<[u8; KEY_LEN], Error> {
+    let m = std::fs::symlink_metadata(path).map_err(|_| Error::Auth)?;
+    if !m.is_file() || m.len() != KEY_LEN as u64 {
+        return Err(Error::Auth);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if m.uid() != user() || m.mode() & 0o077 != 0 {
+            return Err(Error::Auth);
+        }
+    }
+    let mut k = [0u8; KEY_LEN];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut k)).map_err(|_| Error::Auth)?;
+    Ok(k)
+}
+
+// reads exactly `buf` within `d`, or fails
+fn recv(c: &mut Conn, buf: &mut [u8], d: Duration) -> Result<(), Error> {
     #[cfg(not(windows))]
     {
-        let _ = c.set_read_timeout(d);
-        let _ = c.set_write_timeout(d);
-        let _ = c.set_nodelay(true);
+        let _ = c.set_read_timeout(Some(d));
+        fill(c, buf, true, 0)
     }
     #[cfg(windows)]
-    let _ = (c, d);
+    {
+        // a synchronous pipe read can't time out: wait until the bytes are there, then read them
+        let end = Instant::now() + d;
+        let mut at = 0;
+        while at < buf.len() {
+            let n = pipe::available(c)?;
+            if n > 0 {
+                let upto = (at + n).min(buf.len());
+                at += c.read(&mut buf[at..upto])?;
+            } else if Instant::now() >= end {
+                return Err(Error::Io(io::ErrorKind::TimedOut));
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Connects as a screensaver: the first address (or the pipe) that answers with our hello. The connection's reads
-/// time out after a second (TCP), so a reader can look up between frames.
+#[cfg(not(windows))]
+fn set_timeouts(c: &Conn, read: Duration, write: Duration) {
+    let _ = c.set_read_timeout(Some(read));
+    let _ = c.set_write_timeout(Some(write));
+    let _ = c.set_nodelay(true);
+}
+
+// the screensaver's half of the handshake: our hello and nonce; the widget's hello, nonce and proof; our proof
+fn shake_client(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
+    let nc = nonce()?;
+    c.write_all(&[hello(user()).as_slice(), &nc].concat())?;
+    let mut h = [0u8; HELLO_LEN];
+    recv(c, &mut h, SHAKE)?;
+    if parse_hello(&h)? != user() {
+        return Err(Error::User);
+    }
+    let mut rest = [0u8; NONCE + MAC];
+    recv(c, &mut rest, SHAKE)?;
+    let (ns, proof) = rest.split_at(NONCE);
+    check(key, b"IFZS widget", &nc, ns, proof)?;
+    c.write_all(&tag(key, b"IFZS saver", &nc, ns))?;
+    Ok(())
+}
+
+// the widget's half
+fn shake_server(c: &mut Conn, key: &[u8; KEY_LEN]) -> Result<(), Error> {
+    let mut first = [0u8; HELLO_LEN + NONCE];
+    recv(c, &mut first, SHAKE)?;
+    let h: [u8; HELLO_LEN] = first[..HELLO_LEN].try_into().unwrap();
+    let nc = &first[HELLO_LEN..];
+    let theirs = parse_hello(&h);
+    if theirs == Err(Error::Magic) {
+        return Err(Error::Magic);
+    }
+    let ns = nonce()?;
+    // our hello either way, so a screensaver of another version knows to play its own run; a proof only for this user
+    let proof = if theirs == Ok(user()) { tag(key, b"IFZS widget", nc, &ns) } else { [0; MAC] };
+    c.write_all(&[hello(user()).as_slice(), &ns, &proof].concat())?;
+    if theirs? != user() {
+        return Err(Error::User);
+    }
+    let mut got = [0u8; MAC];
+    recv(c, &mut got, SHAKE)?;
+    check(key, b"IFZS saver", nc, &ns, &got)
+}
+
+/// Connects as a screensaver: the first address (or the pipe) where the other end proves it holds the key. Frame reads
+/// on the connection time out after a second (TCP), so a reader can look up between frames.
 pub fn connect(ep: &Endpoint) -> Result<Conn, Error> {
-    let shake = |mut c: Conn| -> Result<Conn, Error> {
-        timeouts(&c, Some(Duration::from_secs(1)));
-        c.write_all(&hello(user()))?;
-        let mut h = [0u8; HELLO_LEN];
-        fill(&mut c, &mut h, true, 1)?;
-        if parse_hello(&h)? != user() {
-            return Err(Error::User);
-        }
-        Ok(c)
-    };
-    match ep {
+    let key = read_key(&ep.key)?;
+    match &ep.at {
         #[cfg(not(windows))]
-        Endpoint::Tcp(addrs) => {
+        Addr::Tcp(addrs) => {
             let mut last = Error::Io(io::ErrorKind::NotFound);
             for a in addrs {
-                match std::net::TcpStream::connect_timeout(a, Duration::from_millis(250)).map_err(Error::from).and_then(shake) {
+                let tried = std::net::TcpStream::connect_timeout(a, Duration::from_millis(250)).map_err(Error::from).and_then(|mut c| {
+                    set_timeouts(&c, SHAKE, SHAKE);
+                    shake_client(&mut c, &key)?;
+                    let _ = c.set_read_timeout(Some(Duration::from_secs(1)));
+                    Ok(c)
+                });
+                match tried {
                     Ok(c) => return Ok(c),
                     Err(e) => last = e,
                 }
@@ -291,7 +452,15 @@ pub fn connect(ep: &Endpoint) -> Result<Conn, Error> {
             Err(last)
         }
         #[cfg(windows)]
-        Endpoint::Pipe(name) => shake(std::fs::OpenOptions::new().read(true).write(true).open(name)?),
+        Addr::Pipe(name) => {
+            let mut c = std::fs::OpenOptions::new().read(true).write(true).open(name)?;
+            // the pipe's server must run as this user, and then prove it holds the key
+            if !pipe::server_is_us(&c) {
+                return Err(Error::Auth);
+            }
+            shake_client(&mut c, &key)?;
+            Ok(c)
+        }
     }
 }
 
@@ -304,10 +473,10 @@ enum Listener {
 }
 
 impl Listener {
-    fn bind(ep: &Endpoint) -> io::Result<Listener> {
-        match ep {
+    fn bind(at: &Addr) -> io::Result<Listener> {
+        match at {
             #[cfg(not(windows))]
-            Endpoint::Tcp(addrs) => {
+            Addr::Tcp(addrs) => {
                 let mut last = io::Error::from(io::ErrorKind::AddrInUse);
                 for a in addrs {
                     match std::net::TcpListener::bind(a) {
@@ -318,9 +487,9 @@ impl Listener {
                 Err(last)
             }
             #[cfg(windows)]
-            Endpoint::Pipe(name) => {
+            Addr::Pipe(name) => {
                 let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
-                // the first instance claims the name now, so a second widget fails here rather than at accept
+                // the first instance claims the name now, so a squatter (or a second widget) fails here, not later
                 let next = Some(pipe::create(&name, true)?);
                 Ok(Listener::Pipe { name, next })
             }
@@ -345,22 +514,111 @@ impl Listener {
 
 #[cfg(windows)]
 mod pipe {
-    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{CloseHandle, GetLastError, LocalFree, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE},
+        Security::{
+            Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
+            GetLengthSid, GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        },
         Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX},
-        System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT},
+        System::{
+            Pipes::{
+                ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PeekNamedPipe, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+                PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+            },
+            Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
     };
 
-    /// A new instance of the pipe (`first`: failing if another process has the name), as a raw handle.
-    pub fn create(name: &[u16], first: bool) -> std::io::Result<isize> {
-        let open = PIPE_ACCESS_DUPLEX | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
-        // SAFETY: `name` is NUL-terminated UTF-16
-        let h = unsafe { CreateNamedPipeW(name.as_ptr(), open, PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 12, 0, std::ptr::null()) };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(std::io::Error::last_os_error());
+    // runs `f` on the SID of the user `process` runs as
+    unsafe fn with_token_user<T>(process: HANDLE, f: impl FnOnce(PSID) -> Option<T>) -> Option<T> {
+        let mut tok: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut tok) == 0 {
+            return None;
         }
-        Ok(h as isize)
+        let mut buf = vec![0u64; 64];
+        let mut len = 0u32;
+        let ok = GetTokenInformation(tok, TokenUser, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len);
+        CloseHandle(tok);
+        if ok == 0 {
+            return None;
+        }
+        f((*(buf.as_ptr() as *const TOKEN_USER)).User.Sid)
+    }
+
+    // the SID's bytes: two SIDs are the same exactly when these are
+    unsafe fn sid_bytes(sid: PSID) -> Option<Vec<u8>> {
+        Some(std::slice::from_raw_parts(sid as *const u8, GetLengthSid(sid) as usize).to_vec())
+    }
+
+    /// This process's user as a SID string (S-1-5-21-…).
+    pub fn user_sid() -> Option<String> {
+        // SAFETY: the string is read up to its NUL, then LocalFree'd
+        unsafe {
+            with_token_user(GetCurrentProcess(), |sid| {
+                let mut s: *mut u16 = std::ptr::null_mut();
+                if ConvertSidToStringSidW(sid, &mut s) == 0 {
+                    return None;
+                }
+                let n = (0..).take_while(|&i| *s.add(i) != 0).count();
+                let out = String::from_utf16_lossy(std::slice::from_raw_parts(s, n));
+                LocalFree(s.cast());
+                Some(out)
+            })
+        }
+    }
+
+    /// Whether the process serving the pipe `f` runs as this user.
+    pub fn server_is_us(f: &std::fs::File) -> bool {
+        // SAFETY: the process handle is closed; the SIDs are copied out while their buffers live
+        unsafe {
+            let mut pid = 0u32;
+            if GetNamedPipeServerProcessId(f.as_raw_handle() as HANDLE, &mut pid) == 0 {
+                return false;
+            }
+            let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if p.is_null() {
+                return false;
+            }
+            let theirs = with_token_user(p, |s| sid_bytes(s));
+            CloseHandle(p);
+            let ours = with_token_user(GetCurrentProcess(), |s| sid_bytes(s));
+            theirs.is_some() && theirs == ours
+        }
+    }
+
+    /// A new instance of the pipe that only this user can open (`first`: failing if anyone has the name already), as a
+    /// raw handle.
+    pub fn create(name: &[u16], first: bool) -> std::io::Result<isize> {
+        let sid = user_sid().ok_or_else(|| std::io::Error::other("no user SID"))?;
+        // protected DACL: generic all for this user's SID, nothing for anyone else
+        let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})").encode_utf16().chain([0]).collect();
+        let open = PIPE_ACCESS_DUPLEX | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+        // SAFETY: `name` and `sddl` are NUL-terminated UTF-16; the descriptor lives until after CreateNamedPipeW
+        unsafe {
+            let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+            if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let sa = SECURITY_ATTRIBUTES { nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: sd, bInheritHandle: 0 };
+            let h = CreateNamedPipeW(
+                name.as_ptr(),
+                open,
+                PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES,
+                1 << 16,
+                1 << 12,
+                0,
+                &sa,
+            );
+            let e = std::io::Error::last_os_error();
+            LocalFree(sd);
+            if h == INVALID_HANDLE_VALUE {
+                return Err(e);
+            }
+            Ok(h as isize)
+        }
     }
 
     /// Waits for a client to open the instance `h`; the File owns it from then on.
@@ -375,6 +633,16 @@ mod pipe {
             }
             Ok(std::fs::File::from_raw_handle(h as _))
         }
+    }
+
+    /// Bytes waiting to be read, without blocking.
+    pub fn available(f: &std::fs::File) -> Result<usize, super::Error> {
+        let mut n = 0u32;
+        // SAFETY: `f` is an open pipe handle; only the count is written
+        if unsafe { PeekNamedPipe(f.as_raw_handle() as HANDLE, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut n, std::ptr::null_mut()) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(n as usize)
     }
 }
 
@@ -414,8 +682,11 @@ impl Hub {
         Self::start_on(&endpoint(), changed)
     }
 
+    /// Serves `ep`, writing a new key to `ep.key`.
     pub fn start_on(ep: &Endpoint, changed: impl Fn() + Send + Sync + 'static) -> io::Result<Hub> {
-        let mut l = Listener::bind(ep)?;
+        let mut l = Listener::bind(&ep.at)?;
+        // a new key each launch, once the address is ours
+        let key = new_key(&ep.key)?;
         let inner = Arc::new(Inner { slots: Mutex::default(), pending: Mutex::new(0), changed: Box::new(changed), epoch: Instant::now() });
         let hub = Hub { inner: inner.clone() };
         std::thread::Builder::new().name("saver-accept".into()).spawn(move || loop {
@@ -428,7 +699,7 @@ impl Hub {
                     }
                     *pending += 1;
                     drop(pending);
-                    let _ = std::thread::Builder::new().name("saver-client".into()).spawn(move || serve(inner, c));
+                    let _ = std::thread::Builder::new().name("saver-client".into()).spawn(move || serve(inner, c, key));
                 }
                 Err(_) => std::thread::sleep(Duration::from_secs(1)),
             }
@@ -460,18 +731,10 @@ impl Hub {
     }
 }
 
-fn serve(inner: Arc<Inner>, mut c: Conn) {
-    let greet = (|| -> Result<(), Error> {
-        timeouts(&c, Some(Duration::from_secs(2)));
-        let mut h = [0u8; HELLO_LEN];
-        fill(&mut c, &mut h, true, 0)?;
-        // our hello either way, so a screensaver of another version knows to play its own run
-        c.write_all(&hello(user()))?;
-        if parse_hello(&h)? != user() {
-            return Err(Error::User);
-        }
-        Ok(())
-    })();
+fn serve(inner: Arc<Inner>, mut c: Conn, key: [u8; KEY_LEN]) {
+    #[cfg(not(windows))]
+    set_timeouts(&c, SHAKE, SHAKE);
+    let greet = shake_server(&mut c, &key);
     *inner.pending.lock().unwrap() -= 1;
     if greet.is_err() {
         return;

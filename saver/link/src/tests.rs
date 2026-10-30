@@ -170,16 +170,26 @@ fn garbage_never_panics() {
 
 // ── over the real transport
 
+static N: AtomicUsize = AtomicUsize::new(0);
+
+fn temp_key() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("ifz-link-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))).join("key")
+}
+
 fn test_endpoint() -> Endpoint {
     #[cfg(windows)]
-    {
-        static N: AtomicUsize = AtomicUsize::new(0);
-        Endpoint::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
-    }
+    let at = Addr::Pipe(format!(r"\\.\pipe\idle-fighterz-saver-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     #[cfg(not(windows))]
-    {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        Endpoint::Tcp(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+    let at = Addr::Tcp(vec![std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()]);
+    Endpoint { at, key: temp_key() }
+}
+
+fn raw(ep: &Endpoint) -> Conn {
+    match &ep.at {
+        #[cfg(not(windows))]
+        Addr::Tcp(a) => std::net::TcpStream::connect(a[0]).unwrap(),
+        #[cfg(windows)]
+        Addr::Pipe(n) => std::fs::OpenOptions::new().read(true).write(true).open(n).unwrap(),
     }
 }
 
@@ -218,59 +228,122 @@ fn a_screensaver_attaches_gets_frames_and_detaches() {
     until("the change", || changes.load(Ordering::Relaxed) == 2);
 }
 
+#[cfg(unix)]
 #[test]
-fn another_version_is_turned_away_both_ways() {
+fn the_key_is_the_users_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = temp_key();
+    let k = new_key(&p).unwrap();
+    assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(read_key(&p), Ok(k));
+    assert_ne!(new_key(&p).unwrap(), k, "a new key each launch");
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert_eq!(read_key(&p), Err(Error::Auth), "readable by the group");
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&p, [0u8; KEY_LEN + 1]).unwrap();
+    assert_eq!(read_key(&p), Err(Error::Auth), "the wrong size");
+    std::fs::remove_file(&p).unwrap();
+    std::os::unix::fs::symlink("/etc/hosts", &p).unwrap();
+    assert_eq!(read_key(&p), Err(Error::Auth), "a link");
+    assert_eq!(read_key(&temp_key()), Err(Error::Auth), "none");
+}
+
+#[test]
+fn a_screensaver_without_the_key_gets_nothing() {
     let ep = test_endpoint();
     let hub = Hub::start_on(&ep, || {}).unwrap();
-    let raw = |ep: &Endpoint| -> Conn {
-        match ep {
-            #[cfg(not(windows))]
-            Endpoint::Tcp(a) => std::net::TcpStream::connect(a[0]).unwrap(),
-            #[cfg(windows)]
-            Endpoint::Pipe(n) => std::fs::OpenOptions::new().read(true).write(true).open(n).unwrap(),
-        }
-    };
+    // another key: it can't check the widget's proof, nor make its own
+    let other = Endpoint { at: ep.at.clone(), key: temp_key() };
+    new_key(&other.key).unwrap();
+    assert_eq!(connect(&other).err(), Some(Error::Auth));
+    // a stranger that goes through the motions with a made-up proof
     let mut c = raw(&ep);
-    let mut h = hello(user());
-    h[4] = 9;
-    c.write_all(&h).unwrap();
-    let mut back = [0u8; HELLO_LEN];
+    c.write_all(&[hello(user()).as_slice(), &[7; NONCE]].concat()).unwrap();
+    let mut back = [0u8; HELLO_LEN + NONCE + MAC];
     c.read_exact(&mut back).unwrap();
-    assert_eq!(parse_hello(&back), Ok(user()));
-    std::thread::sleep(Duration::from_millis(100));
+    c.write_all(&[9; MAC]).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
     assert!(!hub.attached());
-    // and another user's screensaver
+    hub.publish(&[1; 4], 1, 1, "secret");
+    let mut b = [0u8; 1];
+    assert!(!matches!(c.read(&mut b), Ok(1)), "no frame for it");
+}
+
+#[test]
+fn another_version_or_user_is_turned_away() {
+    let ep = test_endpoint();
+    let hub = Hub::start_on(&ep, || {}).unwrap();
+    for (version, who) in [(9u8, user()), (VERSION as u8, user().wrapping_add(1))] {
+        let mut c = raw(&ep);
+        let mut h = hello(who);
+        h[4] = version;
+        c.write_all(&[h.as_slice(), &[1; NONCE]].concat()).unwrap();
+        let mut back = [0u8; HELLO_LEN + NONCE + MAC];
+        c.read_exact(&mut back).unwrap();
+        assert_eq!(parse_hello(&back[..HELLO_LEN].try_into().unwrap()), Ok(user()), "our hello, so it knows");
+        assert_eq!(&back[HELLO_LEN + NONCE..], &[0; MAC], "and no proof");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!hub.attached());
+    }
+}
+
+#[test]
+fn a_silent_screensaver_is_dropped_after_the_handshake_timeout() {
+    let ep = test_endpoint();
+    let _hub = Hub::start_on(&ep, || {}).unwrap();
     let mut c = raw(&ep);
-    c.write_all(&hello(user().wrapping_add(1))).unwrap();
-    c.read_exact(&mut back).unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(!hub.attached());
+    let t = Instant::now();
+    let mut b = [0u8; 1];
+    // the widget closes it: end of file, or an error
+    assert!(!matches!(c.read(&mut b), Ok(1)));
+    assert!(t.elapsed() >= SHAKE - Duration::from_millis(200) && t.elapsed() < SHAKE * 3, "{:?}", t.elapsed());
 }
 
 #[cfg(not(windows))]
 #[test]
-fn a_server_of_another_version_or_a_stranger_is_refused() {
+fn a_server_that_isnt_ours_is_refused() {
     use std::net::TcpListener;
     let serve = |reply: Vec<u8>| {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let ep = Endpoint::Tcp(vec![l.local_addr().unwrap()]);
+        let ep = Endpoint { at: Addr::Tcp(vec![l.local_addr().unwrap()]), key: temp_key() };
+        new_key(&ep.key).unwrap();
         std::thread::spawn(move || {
             let (mut c, _) = l.accept().unwrap();
-            let mut h = [0u8; HELLO_LEN];
+            let mut h = [0u8; HELLO_LEN + NONCE];
             let _ = c.read_exact(&mut h);
             let _ = c.write_all(&reply);
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_secs(3));
         });
         ep
     };
-    let mut v2 = hello(user());
+    let mut v2 = hello(user()).to_vec();
     v2[4] = 2;
-    assert_eq!(connect(&serve(v2.to_vec())).err(), Some(Error::Version(2)));
-    assert_eq!(connect(&serve(b"HTTP/1.1 400".to_vec())).err(), Some(Error::Magic));
-    // a hello, then a frame that claims to be enormous
-    let mut evil = hello(user()).to_vec();
-    evil.extend_from_slice(&[KIND_FRAME, 0xff, 0xff, 0xff, 0x7f]);
-    let mut c = connect(&serve(evil)).unwrap();
+    assert_eq!(connect(&serve(v2)).err(), Some(Error::Version(2)));
+    assert_eq!(connect(&serve(b"HTTP/1.1 400 Bad Request\r\n\r\n".repeat(3))).err(), Some(Error::Magic));
+    // a squatter on the port: our hello, but no proof
+    let squat = [hello(user()).as_slice(), &[0; NONCE + MAC]].concat();
+    assert_eq!(connect(&serve(squat)).err(), Some(Error::Auth));
+    // one that never answers
+    let t = Instant::now();
+    assert!(matches!(connect(&serve(Vec::new())), Err(Error::Io(_))));
+    assert!(t.elapsed() < SHAKE * 2);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_genuine_server_sending_an_oversized_frame_is_an_error() {
+    let ep = test_endpoint();
+    let key = new_key(&ep.key).unwrap();
+    let Addr::Tcp(a) = &ep.at;
+    let l = std::net::TcpListener::bind(a[0]).unwrap();
+    std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        shake_server(&mut c, &key).unwrap();
+        let _ = c.write_all(&[KIND_FRAME, 0xff, 0xff, 0xff, 0x7f]);
+        std::thread::sleep(Duration::from_secs(1));
+    });
+    let mut c = connect(&ep).unwrap();
     assert!(matches!(read_frame(&mut c), Err(Error::TooBig(_))));
 }
 
