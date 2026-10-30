@@ -200,7 +200,8 @@ impl Core {
     fn publish(&self, b: &Bridge, p: &Paint) {
         if let Some(h) = self.saver.get().filter(|h| h.attached()) {
             let (w, ht) = p.painter.size();
-            h.publish(p.painter.rgba(), w as usize, ht as usize, &short(b.game.hud.pl));
+            let sky = saver_link::Sky { world: b.game.s.world.min(255) as u8, night: (b.game.tl.night_k.clamp(0.0, 1.0) * 255.0).round() as u8 };
+            h.publish(p.painter.rgba(), w as usize, ht as usize, &short(b.game.hud.pl), sky);
         }
     }
 
@@ -1020,6 +1021,7 @@ mod tests {
         assert_eq!(f.rgba, core.paint().painter.rgba());
         assert!(f.rgba.chunks(4).any(|p| p[3] != 0), "the frame has the planet in it");
         assert_eq!(f.power, short(core.with(|b| b.game.hud.pl).unwrap()));
+        assert_eq!(f.sky.world as u32, core.with(|b| b.game.s.world).unwrap());
         drop(c);
         let t = Instant::now();
         while core.watched() {
