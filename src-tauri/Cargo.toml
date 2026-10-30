@@ -67,6 +67,8 @@ tauri-plugin-single-instance = "=2.5.3"
 gtk = "=0.18.2"
 # the freedesktop settings portal's color scheme, for a tray icon that shows on the panel
 zbus = "=5.19.0"
+# X11: whether Alt is held (ghost mode) and whether the active window is fullscreen (auto-hide); loaded at run time
+x11-dl = "=2.21.0"
 
 # the taskbar's light or dark theme, for the same
 [target.'cfg(target_os = "windows")'.dependencies]

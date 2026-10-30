@@ -1764,6 +1764,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "windows-sys 0.61.2",
  "winreg 0.56.0",
+ "x11-dl",
  "zbus",
 ]
 
