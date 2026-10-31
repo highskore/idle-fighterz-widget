@@ -25,6 +25,8 @@
     update_check: 'updates upgrade version new release',
     sound: 'audio volume mute sfx music noise',
     recap: 'away back idle summary welcome return while you were away',
+    raid_windows: 'spectacle villain raid desktop windows overlay boss fun effects',
+    screen_beam: 'spectacle kamehameha galick final flash beam screen desktop overlay fun effects',
     profile: 'preset presets profiles work play mode save load switch',
     notify: 'notifications alerts banners popups',
     permission: 'notifications alerts allow permission blocked',

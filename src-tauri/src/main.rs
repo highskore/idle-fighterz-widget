@@ -32,6 +32,8 @@ mod planet;
 #[cfg(feature = "rust-core")]
 mod recap;
 mod screensaver;
+#[cfg(feature = "rust-core")]
+mod spectacle;
 mod update;
 
 // every setting and its default; a saved file only overrides keys listed here
@@ -39,7 +41,7 @@ const DEFAULTS: &str = r#"{
   "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
-  "ghost": false, "auto_hide": true, "battery_auto": true,
+  "ghost": false, "auto_hide": true, "battery_auto": true, "raid_windows": false, "screen_beam": false,
   "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
   "shortcut": "Alt+Cmd+KeyP",
   "settings_style": "compact", "tray_style": "menu", "onboarded": false
@@ -178,6 +180,11 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["photo"] = json!(photo_ready(app));
     s["version"] = json!(app.package_info().version.to_string());
     s["popover_ok"] = json!(cfg!(not(target_os = "linux")));
+    #[cfg(feature = "rust-core")]
+    let spectacle = spectacle::AVAILABLE && photo_ready(app);
+    #[cfg(not(feature = "rust-core"))]
+    let spectacle = false;
+    s["spectacle_ok"] = json!(spectacle);
     s
 }
 
@@ -540,19 +547,8 @@ fn hidden_tick(app: &AppHandle, caught: planet::Caught) {
 // widget.js's notifications: each kind its own toggle, none in quiet hours, at most one a minute per kind
 #[cfg(feature = "rust-core")]
 fn notify_hidden(app: &AppHandle, s: &Value, kind: &'static str, arg: &str) {
-    use chrono::Timelike;
-    let mins = |hm: &Value| {
-        let hm = hm.as_str().unwrap_or("");
-        let mut p = hm.split(':').map(|x| x.trim().parse::<u32>().unwrap_or(0));
-        p.next().unwrap_or(0) * 60 + p.next().unwrap_or(0)
-    };
-    let q = &s["quiet"];
-    if q["on"].as_bool().unwrap_or(false) {
-        let t = chrono::Local::now();
-        let (now, a, b) = (t.hour() * 60 + t.minute(), mins(&q["from"]), mins(&q["to"]));
-        if if a <= b { now >= a && now < b } else { now >= a || now < b } {
-            return;
-        }
+    if focus::quiet_now(&s["quiet"]) {
+        return;
     }
     if !s["notify"][kind].as_bool().unwrap_or(false) {
         return;
@@ -835,7 +831,7 @@ fn main() {
                 smoke("engine: the Rust core");
                 let https = app.config().app.windows.iter().any(|w| w.label == "main" && w.use_https_scheme);
                 main.navigate(hud_url(&main.url()?, https))?;
-                planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick });
+                planet::run(app.handle().clone(), planet::Hooks { idle_fps: fps, plays_hidden, hidden: hidden_tick, moment: spectacle::moment });
                 app.manage(photo::Photo::default());
                 let photo = MenuItem::with_id(app, "photo", "Photo Mode", true, None::<&str>)?;
                 if let Some(t) = app.state::<State>().tray.lock().unwrap().as_ref() {

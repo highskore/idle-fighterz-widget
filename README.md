@@ -27,6 +27,7 @@ Your hero runs laps around a pixel-art planet, powers up while you work, and fig
 - **Light on your machine.** The game runs natively, in Rust, and on macOS its frames go straight to the screen under the widget's HUD. It draws at 30 fps, and you can switch to battery saver. Hidden, it draws nothing and pauses, or ticks along at under 1% of one core if you want notifications or the menu-bar number.
 - **Yours to tweak.** Size, HUD layout, clouds, opacity, always-on-top, launch at login and a global show/hide shortcut. Settings come compact, or full: wider, in tabs, with a live preview of the widget over a light, dark or your own wallpaper.
 - **A popover in the menu bar, if you like.** Click the scouter for your power, form, next goal, dragon balls, quick toggles and the size. Right-click (or <kbd>⌃</kbd>-click) still opens the menu. macOS and Windows.
+- **Spectacles, if you like.** Off by default: during a raid the villain hops out onto your app windows for ten seconds, and a full-charge beam blasts on across the screen. They never take a click or your focus, sit out quiet hours, snoozes, battery saver and reduced motion (and Do Not Disturb, where the system says), and need no permissions. macOS and Windows.
 
 ## Install
 

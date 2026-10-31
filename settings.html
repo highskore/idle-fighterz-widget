@@ -88,6 +88,9 @@ main::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 3px; }
 <div class="row" id="trayrow" data-s="tray_icon" hidden><span>tray icon</span><div class="seg" data-seg="tray_icon"><button data-v="auto">auto</button><button data-v="light">light</button><button data-v="dark">dark</button></div></div>
 <label class="row" data-s="sound"><span>game sound</span><input type="checkbox" data-k="sound"></label>
 <label class="row" data-s="recap"><span>away recap <small>a toast when you're back</small></span><input type="checkbox" data-k="recap"></label>
+<label class="row" data-s="raid_windows"><span>villain on your windows <small>during raids</small></span><input type="checkbox" data-k="raid_windows"></label>
+<label class="row" data-s="screen_beam"><span>beam across the screen <small>on a full charge</small></span><input type="checkbox" data-k="screen_beam"></label>
+<p class="note" id="spnote" data-s="screen_beam">they never take clicks or focus, and sit out quiet hours, snoozes, battery saver, reduced motion and focus (where the system says). the villain only reads where your windows are: no screen recording.</p>
 <label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
 <label class="row" data-s="update_check"><span>check for updates daily</span><input type="checkbox" data-k="update_check"></label>
 <div class="row" data-s="tray_style"><span><b class="barname">menu bar</b> click <small id="trayv"></small></span><div class="seg" data-seg="tray_style"><button data-v="menu">menu</button><button data-v="popover">popover</button></div></div>
@@ -147,6 +150,9 @@ function render(v) {
   // clicks go through a floating widget; ⌥ held takes them again (not on wayland, which shows apps no keys but their own)
   $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through, ' + (s.wayland ? 'off from the tray' : 'hold ' + (MAC ? '⌥' : 'alt') + ' to use it');
   $('hiderow').hidden = !!s.wayland;
+  // the spectacles need an overlay (macOS, Windows) and the game on the Rust core
+  for (const k of ['raid_windows', 'screen_beam']) document.querySelector(`[data-k="${k}"]`).disabled = !s.spectacle_ok;
+  if (!s.spectacle_ok) $('spnote').textContent = 'not on this system yet.';
   // no compositor (Linux): the window can't be see-through, so floating isn't on offer
   document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
   // wayland has no global shortcut (main.rs): the key picker gives way to a hint
