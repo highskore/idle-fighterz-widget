@@ -124,7 +124,11 @@ fn play(app: &AppHandle, m: Moment) {
             let perches = scene::perches(&edges, from, p.floor);
             crate::smoke(&format!("spectacle: the villain on {} windows", perches.len()));
             let go = |app: &AppHandle| app.state::<crate::Shown>().get() && app.try_state::<crate::planet::Core>().is_some_and(|c| c.raid_on(id));
+            // he leaves the widget while he's out, and is back on the planet once the overlay is gone
+            let core = app.try_state::<crate::planet::Core>();
+            core.as_ref().inspect(|c| c.boss_away(true));
             backend::raid(app, &p, from, &perches, imgs, go);
+            core.as_ref().inspect(|c| c.boss_away(false));
         }
         Moment::Beam { x, y, dx, dy, kame, ff, kaio, ape } => {
             // as the game colours a beam: kaioken red, vegeta's final flash gold, a kamehameha blue, a galick gun violet

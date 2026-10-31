@@ -401,6 +401,11 @@ impl Core {
         self.with(|b| b.game.tl.boss.as_ref().is_some_and(|x| x.id == id && !x.dead && !x.fled)).unwrap_or(false)
     }
 
+    /// While the villain is out on the desktop the planet is drawn without him (`Game::boss_away`).
+    pub fn boss_away(&self, on: bool) {
+        let _ = self.with(|b| b.game.boss_away = on);
+    }
+
     /// Reduced motion, as the page said (`planet_view`'s `calm`).
     pub fn calm(&self) -> bool {
         self.with(|b| b.game.calm).unwrap_or(true)
@@ -1512,7 +1517,8 @@ mod tests {
 
         let fire = |core: &Core, full: bool, t0: f64| {
             core.with(|b| {
-                let beam = planet_core::input::Beam { t0, c: if full { 2.5 } else { 1.0 }, x: 60.0, y: 70.0, dx: 1.0, dy: 0.0, z: 0.0, ff: false, full, kaio: false, ape: false };
+                let c = if full { 2.5 } else { 1.0 };
+                let beam = planet_core::input::Beam { t0, c, x: 60.0, y: 70.0, dx: 1.0, dy: 0.0, z: 0.0, ff: false, full, kaio: false, ape: false };
                 b.game.inp.beam = Some(beam);
             })
             .unwrap();
@@ -1524,5 +1530,107 @@ mod tests {
         let ms = tick(&core);
         assert!(matches!(ms[..], [Moment::Beam { x: 130.0, y: 160.0, dx: 2.0, dy: 0.0, .. }]), "the canvas is the buffer at 2×");
         assert!(tick(&core).is_empty(), "once");
+    }
+}
+
+#[cfg(test)]
+mod away_tests {
+    use super::*;
+    use crate::spectacle::scene;
+
+    // the widget (1×) and its frame over a made-up desktop (never the real screen), with the villain on a window if he's out
+    fn desktop(frame: &[u8], fw: usize, fh: usize, villain: Option<(&[scene::Image; 2], (f64, f64))>) -> scene::Canvas {
+        let (w, h) = (1200usize, 720usize);
+        let mut c = scene::Canvas::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let t = y as f64 / h as f64;
+                let k = (y * w + x) * 4;
+                c.rgba[k..k + 4].copy_from_slice(&[(40.0 + 60.0 * t) as u8, (60.0 + 40.0 * t) as u8, (110.0 - 30.0 * t) as u8, 255]);
+            }
+        }
+        let pane = |c: &mut scene::Canvas, x: usize, y: usize, pw: usize, ph: usize| {
+            for yy in y..y + ph {
+                for xx in x..x + pw {
+                    let k = (yy * w + xx) * 4;
+                    let v = if yy < y + 28 { [214, 214, 220, 255] } else { [246, 246, 248, 255] };
+                    c.rgba[k..k + 4].copy_from_slice(&v);
+                }
+            }
+        };
+        pane(&mut c, 60, 330, 520, 330);
+        pane(&mut c, 180, 220, 300, 90);
+        let img = scene::Image { w: fw, h: fh, rgba: frame.to_vec() };
+        c.feet(&img, 1200.0 - fw as f64 / 2.0 - 20.0, fh as f64 + 10.0, 1.0, 1.0);
+        if let Some((faces, (x, y))) = villain {
+            c.feet(&faces[0], x, y, 3.0, 1.0);
+        }
+        c
+    }
+
+    // While the villain is out on your windows the widget draws its planet without him; when he leaps back, he's there
+    // again. SPECTACLE_CAPTURE=<dir> keeps the three moments as PNGs
+    #[test]
+    fn the_widget_draws_no_boss_while_he_is_out() {
+        let core = Core::new(7, std::env::temp_dir().join(format!("idle-fighterz-test-{}-away.json", std::process::id())));
+        // a 300 pt widget, drawn 1×, as on a desktop
+        core.with(|b| {
+            b.start("Wed Oct 28 2026", 1.7e12);
+            b.game.resize(300.0, 300.0, 1.0);
+        })
+        .unwrap();
+        {
+            let mut p = core.paint();
+            p.painter.resize(300.0, 300.0, 1.0);
+            (p.canvas, p.on) = ([0.0, 0.0, 300.0, 300.0], true);
+        }
+        let mut now = 1.7e12;
+        let mut raid = None;
+        for _ in 0..(600.0 / (4.0 * DT)) as usize {
+            now += 4.0 * DT * 1000.0;
+            core.tick(4.0 * DT, now);
+            raid = core.moments().into_iter().find_map(|m| if let Moment::Raid { sprite, .. } = m { Some(sprite) } else { None });
+            if raid.is_some() {
+                break;
+            }
+        }
+        let sprite = raid.expect("a saga raid within ten minutes");
+        // past his entrance, then the same moment drawn with him in and out
+        for _ in 0..60 {
+            now += 4.0 * DT * 1000.0;
+            core.tick(4.0 * DT, now);
+        }
+        // and not mid-hit (a hit flashes him white)
+        while core.with(|b| b.game.tl.boss.as_ref().is_some_and(|x| x.flash > 0.0)).unwrap() {
+            now += DT * 1000.0;
+            core.tick(DT, now);
+        }
+        let draw = |away: bool| {
+            core.boss_away(away);
+            core.with(|b| {
+                let mut p = core.paint();
+                p.painter.draw(&mut b.game, 0.0);
+                p.painter.rgba().to_vec()
+            })
+            .unwrap()
+        };
+        let (here, away, back) = (draw(false), draw(true), draw(false));
+        let (w, h) = (300, 300);
+        let changed = |a: &[u8], b: &[u8]| (0..w * h).filter(|&i| a[i * 4..i * 4 + 4] != b[i * 4..i * 4 + 4]).count();
+        // a few pixels move between any two draws (sparkles); he is far more than that
+        let (gone, moved) = (changed(&here, &away), changed(&here, &back));
+        assert!(gone > 100 && gone > 5 * moved, "he's gone from the planet: {gone} pixels, {moved} between two draws of him");
+
+        let Some(dir) = std::env::var_os("SPECTACLE_CAPTURE") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        fs::create_dir_all(&dir).unwrap();
+        let faces = scene::faces(sprite.w, sprite.h, &sprite.col);
+        for (name, frame, out) in [("1-boss-here", &here, false), ("2-boss-away", &away, true), ("3-boss-back", &back, false)] {
+            let c = desktop(frame, w, h, out.then_some((&faces, (330.0, 220.0))));
+            let mut e = png::Encoder::new(std::io::BufWriter::new(fs::File::create(dir.join(format!("widget-{name}.png"))).unwrap()), 1200, 720);
+            e.set_color(png::ColorType::Rgba);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header().unwrap().write_image_data(&c.rgba).unwrap();
+        }
     }
 }
