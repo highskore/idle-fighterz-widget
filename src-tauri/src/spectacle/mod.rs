@@ -86,7 +86,7 @@ fn gate(app: &AppHandle) -> Gate {
 
 /// Where the overlay goes, in the screen's units (points on macOS, physical pixels on Windows): the widget's display,
 /// the floor to stand on when no window will do (the bottom of its work area), the web view's top left, the units in a
-/// CSS pixel, and in one of the game's pixels as the spectacles draw them.
+/// CSS pixel, and in one of the game's pixels as the beam is drawn (the villain is drawn his size on the planet).
 #[cfg_attr(not(any(all(target_os = "macos", feature = "native-renderer"), windows)), allow(dead_code))]
 struct Place {
     display: crate::system::Rect,
@@ -115,8 +115,10 @@ fn play(app: &AppHandle, m: Moment) {
     let Some(p) = place(app) else { return };
     let at = |x: f64, y: f64| (p.origin.0 + x * p.k, p.origin.1 + y * p.k);
     match m {
-        Moment::Raid { id, sprite, x, y } => {
+        Moment::Raid { id, sprite, x, y, scale } => {
             let from = at(x, y);
+            // as big as he is on the planet: the widget's own scale, whatever its size
+            let p = Place { px: scale * p.k, ..p };
             let imgs = scene::faces(sprite.w, sprite.h, &sprite.col);
             let (sw, sh) = (imgs[0].w as f64 * p.px, imgs[0].h as f64 * p.px);
             let wins = crate::system::windows().unwrap_or_default();

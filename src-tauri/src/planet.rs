@@ -194,7 +194,7 @@ impl Paint {
                 let name = if b.name == "past vegeta" { "vegeta" } else { b.name.as_str() };
                 let sprite = planet_core::data::VILLAINS.iter().position(|v| v.0 == name).and_then(|i| sprite::baked().get(&format!("VILLAINS.{i}.spr")));
                 if let Some(sprite) = sprite {
-                    self.moments.push(Moment::Raid { id: b.id, sprite, x: cx + b.x * kx, y: cy + b.y * ky });
+                    self.moments.push(Moment::Raid { id: b.id, sprite, x: cx + b.x * kx, y: cy + b.y * ky, scale: b.k * kx });
                 }
             }
         }
@@ -208,8 +208,9 @@ impl Paint {
 
 /// What the spectacles play (spectacle/), in the page's CSS pixels.
 pub enum Moment {
-    /// a saga villain's fight has started: boss `id`, standing at (`x`, `y`)
-    Raid { id: u32, sprite: &'static sprite::Sprite, x: f64, y: f64 },
+    /// a saga villain's fight has started: boss `id`, standing at (`x`, `y`), each of his sprite's pixels drawn `scale`
+    /// CSS pixels across
+    Raid { id: u32, sprite: &'static sprite::Sprite, x: f64, y: f64, scale: f64 },
     /// a full-charge beam, from the hero's hand at (`x`, `y`) toward (`dx`, `dy`): a kamehameha (or else a galick gun),
     /// a final flash, under kaioken or as the great ape
     Beam { x: f64, y: f64, dx: f64, dy: f64, kame: bool, ff: bool, kaio: bool, ape: bool },
@@ -1500,7 +1501,8 @@ mod tests {
         let mut raids = Vec::new();
         for _ in 0..(600.0 / (4.0 * DT)) as usize {
             for m in tick(&core) {
-                if let Moment::Raid { id, x, y, sprite } = m {
+                if let Moment::Raid { id, x, y, sprite, scale } = m {
+                    assert!((0.5..3.0).contains(&scale), "his size on the page: {scale}");
                     assert!((10.0..276.0).contains(&x) && (20.0..286.0).contains(&y), "on the canvas: {x},{y}");
                     assert!(sprite.w > 10);
                     raids.push(id);
@@ -1539,7 +1541,7 @@ mod away_tests {
     use crate::spectacle::scene;
 
     // the widget (1×) and its frame over a made-up desktop (never the real screen), with the villain on a window if he's out
-    fn desktop(frame: &[u8], fw: usize, fh: usize, villain: Option<(&[scene::Image; 2], (f64, f64))>) -> scene::Canvas {
+    fn desktop(frame: &[u8], fw: usize, fh: usize, villain: Option<(&[scene::Image; 2], (f64, f64), f64)>) -> scene::Canvas {
         let (w, h) = (1200usize, 720usize);
         let mut c = scene::Canvas::new(w, h);
         for y in 0..h {
@@ -1562,8 +1564,8 @@ mod away_tests {
         pane(&mut c, 180, 220, 300, 90);
         let img = scene::Image { w: fw, h: fh, rgba: frame.to_vec() };
         c.feet(&img, 1200.0 - fw as f64 / 2.0 - 20.0, fh as f64 + 10.0, 1.0, 1.0);
-        if let Some((faces, (x, y))) = villain {
-            c.feet(&faces[0], x, y, 3.0, 1.0);
+        if let Some((faces, (x, y), px)) = villain {
+            c.feet(&faces[0], x, y, px, 1.0);
         }
         c
     }
@@ -1589,12 +1591,12 @@ mod away_tests {
         for _ in 0..(600.0 / (4.0 * DT)) as usize {
             now += 4.0 * DT * 1000.0;
             core.tick(4.0 * DT, now);
-            raid = core.moments().into_iter().find_map(|m| if let Moment::Raid { sprite, .. } = m { Some(sprite) } else { None });
+            raid = core.moments().into_iter().find_map(|m| if let Moment::Raid { sprite, scale, .. } = m { Some((sprite, scale)) } else { None });
             if raid.is_some() {
                 break;
             }
         }
-        let sprite = raid.expect("a saga raid within ten minutes");
+        let (sprite, scale) = raid.expect("a saga raid within ten minutes");
         // past his entrance, then the same moment drawn with him in and out
         for _ in 0..60 {
             now += 4.0 * DT * 1000.0;
@@ -1626,7 +1628,7 @@ mod away_tests {
         fs::create_dir_all(&dir).unwrap();
         let faces = scene::faces(sprite.w, sprite.h, &sprite.col);
         for (name, frame, out) in [("1-boss-here", &here, false), ("2-boss-away", &away, true), ("3-boss-back", &back, false)] {
-            let c = desktop(frame, w, h, out.then_some((&faces, (330.0, 220.0))));
+            let c = desktop(frame, w, h, out.then_some((&faces, (330.0, 220.0), scale)));
             let mut e = png::Encoder::new(std::io::BufWriter::new(fs::File::create(dir.join(format!("widget-{name}.png"))).unwrap()), 1200, 720);
             e.set_color(png::ColorType::Rgba);
             e.set_depth(png::BitDepth::Eight);
