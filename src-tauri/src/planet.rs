@@ -807,12 +807,6 @@ pub fn planet_buy_n(core: State<'_, Core>, key: String, n: u32) -> Result<bool, 
     core.with(|b| b.buy_n(&key, n))
 }
 
-/// The undo button on a big buy's toast.
-#[tauri::command]
-pub fn planet_undo(core: State<'_, Core>, id: u32) -> Result<bool, String> {
-    core.with(|b| b.undo(id))
-}
-
 /// A shop row's hover card, as JSON.
 #[tauri::command]
 pub fn planet_shop_info(core: State<'_, Core>, key: String) -> Result<String, String> {
@@ -913,7 +907,7 @@ macro_rules! planet_commands {
             crate::planet::planet_angels, crate::planet::planet_ascend_info, crate::planet::planet_god_info, crate::planet::planet_zeno_info,
             crate::planet::planet_card, crate::planet::planet_fps, crate::planet::planet_view, crate::planet::planet_pixels,
             crate::planet::planet_mask, crate::planet::planet_sprite, crate::planet::planet_itx, crate::planet::planet_itx_jump,
-            crate::planet::planet_spot, crate::planet::planet_buy_n, crate::planet::planet_undo, crate::planet::planet_shop_info,
+            crate::planet::planet_spot, crate::planet::planet_buy_n, crate::planet::planet_shop_info,
             crate::planet::planet_bulk
         ]
     };

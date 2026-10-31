@@ -77,7 +77,6 @@ GAMES.push({
       }
       if (m.shop) ui.shop(m.shop);
       for (const [text, ms] of m.events) ui.event(text, ms);
-      if (m.undo) { const id = m.undo.id; if (m.undo.off) ui.eventOff && ui.eventOff(id); else ui.event(m.undo.text, m.undo.ms, { id, label: 'undo', go: () => call('undo', { id }) }); }
       for (const [cue, ...args] of m.cues) if (back[cue]) ui[cue] && ui[cue](args[0], back[cue]); else if (typeof ui[cue] === 'function') ui[cue](...args);
     };
     tauri.event.listen('planet', ({ payload }) => {
