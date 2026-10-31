@@ -42,7 +42,7 @@ Every pull request (and a manual run from the Actions tab) builds all three, uns
 
 ### Where the secrets live
 
-The signing secrets are kept in a GitHub **environment** called `release`, not at repo level. Only jobs that name it can read them, and only runs from a `desktop-v*` tag can use it: the `build` and `release` jobs name it on a tag run alone, so pull requests and manual runs never get them. Within a job each secret is passed to the one step that needs it, never to the whole job: npm's install scripts, the crates' build scripts and third-party actions don't run next to any of them. The certificate import gets the certificate and its password; the macOS build gets only the identity's name; the notarizing step gets the notary credentials after the build has finished; the Windows build signs by thumbprint from the certificate store. Every third-party action is pinned to a commit.
+The signing secrets are kept in a GitHub **environment** called `release`, not at repo level. Only jobs that name it can read them, and only runs from a `desktop-v*` tag can use it: the `package-macos`, `package-windows` and `release` jobs name it on a tag run alone, so pull requests and manual runs never get them. The `build` job, which runs npm's install scripts and every crate's build script and proc macro, never names it: it leaves the macOS app ad-hoc signed and the Windows exe unsigned. `package-macos` and `package-windows` run on fresh runners, take only those build outputs, and compile and install nothing (`npm ci --ignore-scripts` for the tauri CLI on Windows). Within them each secret is passed to the one step that needs it: the certificate import gets the certificate and its password (macOS: a throwaway keychain whose key only `codesign` may use); the macOS signing step gets only the identity's name and runs `codesign` alone; the notarizing step gets the notary credentials after that; `tauri bundle` signs the exe, the installer and the msi by thumbprint from the certificate store. The keychain or the certificate is deleted in an `always()` step, before the Windows smoke test first runs the app. Every third-party action is pinned to a commit.
 
 One-time setup, with `gh` (repo admin):
 
@@ -92,7 +92,7 @@ Windows code signing (optional: without them the Windows packages are unsigned a
 - [ ] `WINDOWS_CERTIFICATE`: an Authenticode code-signing certificate and its private key as a base64 `.pfx` (`base64 -i cert.pfx | pbcopy`, or `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))` in PowerShell).
 - [ ] `WINDOWS_CERTIFICATE_PASSWORD`: the `.pfx` password (leave unset if it has none).
 
-The workflow imports it into the runner's certificate store and tauri signs the app, the installer and the msi by thumbprint, timestamped. A certificate kept on a hardware token or in a cloud HSM (the norm for new certificates) needs a `signCommand` instead; see [tauri's Windows signing guide](https://v2.tauri.app/distribute/sign/windows/).
+The workflow imports it into the runner's certificate store after the build, and `tauri bundle` signs the app, the installer and the msi by thumbprint, timestamped. It has to be tauri: it patches the exe for each installer (the bundle type) before packing it, so a signature made earlier would break. A certificate kept on a hardware token or in a cloud HSM (the norm for new certificates) needs a `signCommand` instead; see [tauri's Windows signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Homebrew
 

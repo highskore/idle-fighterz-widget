@@ -11,12 +11,14 @@
 #   TARGET                   universal-apple-darwin (default), aarch64-apple-darwin or x86_64-apple-darwin
 #   JOBS                     cargo jobs (default: all cores)
 #
-#   scripts/release.sh [build|package]   both by default. CI runs them as two steps, so the notary credentials are
-#                                        never in the environment of npm or of the crates' build scripts
+#   scripts/release.sh [build|sign|package]   all three by default. build only ad-hoc signs; sign uses the Developer
+#                                             ID, with codesign alone. CI runs build in a job with no secrets and sign
+#                                             and package in another, so neither the certificate nor the notary
+#                                             credentials are ever next to npm or the crates' build scripts
 set -euo pipefail
 cd "$(dirname "$0")/.."
 STAGE=${1:-all}
-case "$STAGE" in all | build | package) ;; *) echo "usage: scripts/release.sh [build|package]" >&2; exit 2 ;; esac
+case "$STAGE" in all | build | sign | package) ;; *) echo "usage: scripts/release.sh [build|sign|package]" >&2; exit 2 ;; esac
 
 TARGET=${TARGET:-universal-apple-darwin}
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -39,22 +41,33 @@ else
 fi
 
 APP="src-tauri/target/$TARGET/release/bundle/macos/$PRODUCT.app"
-if [ "$STAGE" != package ]; then
+if [ "$STAGE" = all ] || [ "$STAGE" = build ]; then
   case "$TARGET" in
     universal-apple-darwin) rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null ;;
     *) rustup target add "$TARGET" >/dev/null ;;
   esac
   [ -d node_modules ] || npm ci --no-audit --no-fund
-  # an empty secret still exports the variable in CI, and tauri then tries to import a certificate that isn't there
-  for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do [ -n "${!v:-}" ] || unset "$v"; done
   npm run -s page
-  # notarizing happens below, with notarytool, for the app and the dmg alike: keep tauri from doing it as well
-  env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
+  # tauri only ad-hoc signs (signingIdentity "-"); the Developer ID signature and notarizing come below, with codesign
+  # and notarytool, so no certificate or notary credential is around while the build runs
+  env -u APPLE_SIGNING_IDENTITY -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
+    -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
     ${JOBS:+CARGO_BUILD_JOBS=$JOBS} npx tauri build --bundles app --target "$TARGET"
   codesign --verify --strict --deep "$APP"
 fi
 [ "$STAGE" = build ] && exit 0
 [ -d "$APP" ] || { echo "no $APP: run scripts/release.sh build first" >&2; exit 1; }
+
+# what tauri would sign, inside out: the binaries in Contents/MacOS, then the app, under the hardened runtime
+if [ "$STAGE" != package ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  [ ! -e "$APP/Contents/Frameworks" ] || { echo "$APP has Frameworks: sign them here too" >&2; exit 1; }
+  xattr -cr "$APP"
+  for f in "$APP"/Contents/MacOS/* "$APP"; do
+    codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
+  done
+  codesign --verify --strict --deep "$APP"
+fi
+[ "$STAGE" = sign ] && exit 0
 rm -rf "$OUT" && mkdir -p "$OUT"
 
 notarize() {   # notarize <file to submit> <file to staple>
