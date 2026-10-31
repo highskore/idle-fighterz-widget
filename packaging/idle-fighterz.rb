@@ -16,11 +16,14 @@ cask "idle-fighterz" do
     strategy :github_latest
   end
 
+  auto_updates true
   depends_on :macos
 
   app "Idle FighterZ.app"
 
-  uninstall quit: "com.highskore.idlefighterz"
+  # launchctl also removes the login item's plist (tauri-plugin-autostart: ~/Library/LaunchAgents/Idle FighterZ.plist)
+  uninstall launchctl: "Idle FighterZ",
+            quit:      "com.highskore.idlefighterz"
 
   zap trash: [
     "~/Library/Application Support/com.highskore.idlefighterz",

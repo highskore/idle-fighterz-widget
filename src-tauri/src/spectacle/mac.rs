@@ -8,7 +8,7 @@ use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
 use objc2_core_foundation::{CFRetained, CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColorSpace, CGImage};
 use objc2_quartz_core::{kCAFilterNearest, kCAGravityResize, CALayer, CATransaction};
-use std::{sync::mpsc, time::Duration};
+use std::{sync::{mpsc, Arc, Mutex}, time::Duration};
 use tauri::{AppHandle, Manager};
 
 // Core Animation takes layer changes from any thread inside an explicit transaction; the panel is only touched on the
@@ -27,11 +27,13 @@ fn quietly(f: impl FnOnce()) {
 /// A layer showing `img`, stretched to its bounds with nearest-neighbour: whole game pixels.
 pub fn picture(img: &scene::Image, space: &CGColorSpace) -> (Retained<CALayer>, CFRetained<CGImage>) {
     let l = CALayer::new();
-    l.setContentsGravity(unsafe { kCAGravityResize });
-    l.setMagnificationFilter(unsafe { kCAFilterNearest });
-    l.setMinificationFilter(unsafe { kCAFilterNearest });
     let cg = image(space, img.w as u32, img.h as u32, &img.rgba);
-    set_contents(&l, &cg);
+    quietly(|| {
+        l.setContentsGravity(unsafe { kCAGravityResize });
+        l.setMagnificationFilter(unsafe { kCAFilterNearest });
+        l.setMinificationFilter(unsafe { kCAFilterNearest });
+        set_contents(&l, &cg);
+    });
     (l, cg)
 }
 
@@ -133,7 +135,14 @@ fn open(app: &AppHandle, area: crate::system::Rect) -> Option<Stage> {
     let (tx, rx) = mpsc::channel();
     let main = app.get_webview_window("main")?;
     let widget = AnyThread(main.ns_window().ok()? as usize);
+    // held while the panel is made: once given up on, a late main thread makes none (nothing would close it)
+    let gave_up = Arc::new(Mutex::new(false));
+    let late = gave_up.clone();
     app.run_on_main_thread(move || unsafe {
+        let gave_up = late.lock().unwrap();
+        if *gave_up {
+            return;
+        }
         let widget = widget.0 as *mut AnyObject;
         let screens: Retained<AnyObject> = msg_send![class!(NSScreen), screens];
         let first: Option<Retained<AnyObject>> = msg_send![&*screens, firstObject];
@@ -173,7 +182,10 @@ fn open(app: &AppHandle, area: crate::system::Rect) -> Option<Stage> {
         let _ = tx.send((AnyThread(panel), AnyThread(root)));
     })
     .ok()?;
-    let (panel, root) = rx.recv_timeout(Duration::from_secs(1)).ok()?;
+    let (panel, root) = rx.recv_timeout(Duration::from_secs(1)).ok().or_else(|| {
+        *gave_up.lock().unwrap() = true;
+        rx.try_recv().ok() // made just as the wait ended
+    })?;
     Some(Stage { panel, root })
 }
 

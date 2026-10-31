@@ -500,6 +500,15 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
 
+      # every checker of SHA256SUMS.minisig embeds the same key: install.sh's, which the signature is checked against below
+      - name: one minisign key
+        run: |
+          SH=$(sed -n "s/^MINISIGN_PUBKEY='\(.*\)'$/\1/p" packaging/install.sh)
+          PS=$(sed -n "s/^ *\$MinisignPublicKey = '\(.*\)'$/\1/p" packaging/install.ps1)
+          RS=$(sed -n 's/^const MINISIGN_PUBKEY: &str = "\(.*\)";$/\1/p' src-tauri/src/update.rs)
+          echo "install.sh: $SH"; echo "install.ps1: $PS"; echo "update.rs: $RS"
+          [ -n "$SH" ] && [ "$PS" = "$SH" ] && [ "$RS" = "$SH" ] || { echo "::error::install.ps1's or update.rs's minisign key isn't install.sh's"; exit 1; }
+
       # SHA256SUMS.minisig: the installers check it with the public key they embed. The secret key is only in this
       # step, and on disk only while it runs; the signature is checked against packaging/install.sh's key before it
       # goes out

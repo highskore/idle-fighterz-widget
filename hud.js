@@ -6,7 +6,12 @@
 GAMES.push({
   id: 'planet',
   mount(st, ui) {
-    const tauri = window.__TAURI__, call = (cmd, args) => tauri.core.invoke('planet_' + cmd, args);
+    const tauri = window.__TAURI__, call = (cmd, args) => {
+      // logged, so a refused call shows (most callers don't wait on it); a caller that does still sees it fail
+      const p = tauri.core.invoke('planet_' + cmd, args);
+      p.catch(e => console.error('planet_' + cmd, e));
+      return p;
+    };
     const ptr = e => { const [bx, by] = st.toBuf(e); return { x: e.clientX, y: e.clientY, bx, by, id: e.pointerId }; };
 
     // page.html reads these synchronously, so they're kept from the last time anything changed

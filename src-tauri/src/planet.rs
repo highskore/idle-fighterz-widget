@@ -688,10 +688,16 @@ pub fn planet_resend(core: State<'_, Core>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn planet_resize(core: State<'_, Core>, w: f64, h: f64, scale: f64) -> Result<(), String> {
+    finite(&[w, h, scale])?;
     core.with(|b| {
         b.game.resize(w, h, scale);
         core.paint().painter.resize(w, h, scale);
     })
+}
+
+// a NaN or infinity on its way to a layer's frame aborts the app (CALayer throws)
+fn finite(n: &[f64]) -> Result<(), String> {
+    n.iter().all(|n| n.is_finite()).then_some(()).ok_or_else(|| "not a finite number".into())
 }
 
 /// How the page shows the game: floating (`bare`) or window mode, its clouds (`st.clouds`, '' for none) and their
@@ -700,6 +706,7 @@ pub fn planet_resize(core: State<'_, Core>, w: f64, h: f64, scale: f64) -> Resul
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn planet_view(core: State<'_, Core>, bare: bool, clouds: String, amount: f64, calm: bool, x: f64, y: f64, w: f64, h: f64, opacity: f64) -> Result<bool, String> {
+    finite(&[amount, x, y, w, h, opacity])?;
     core.with(|b| {
         b.set_calm(calm);
         let mut p = core.paint();
@@ -926,6 +933,14 @@ mod tests {
 
     const SEED: u32 = 7;
     const SHOP: [&str; 6] = ["boots", "partner", "gravity", "scouter", "house", "kaio"];
+
+    #[test]
+    fn a_view_or_size_must_be_finite() {
+        assert!(finite(&[0.0, -3.5, 1e300]).is_ok());
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(finite(&[1.0, bad]).is_err(), "{bad}");
+        }
+    }
 
     fn app(file: PathBuf) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
         let app = mock_builder().manage(Core::new(SEED, file)).invoke_handler(planet_commands![]).build(mock_context(noop_assets())).unwrap();

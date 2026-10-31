@@ -96,9 +96,19 @@ pub fn watch(app: &AppHandle) {
         let core = app.state::<Core>();
         let (mut present, mut away): (Option<Snap>, Option<Snap>) = (None, None);
         loop {
+            let shown = app.state::<Shown>();
+            let n = shown.changes();
             let on = app.state::<State>().settings.lock().unwrap()["recap"].as_bool().unwrap_or(true);
-            let idle = if on { idle() } else { None };
-            match idle {
+            // off, or no widget to show it on: no looking until the setting or the widget changes (hidden, an away
+            // that began keeps, for a widget shown again before the input that ends it)
+            if !on || !shown.get() {
+                if !on {
+                    (present, away) = (None, None);
+                }
+                shown.wait_change(n);
+                continue;
+            }
+            match idle() {
                 None => (present, away) = (None, None),
                 Some(t) if away.is_none() && t >= AWAY => away = present.take(),
                 Some(t) if away.is_some() && t < BACK => {

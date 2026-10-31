@@ -8,7 +8,7 @@ const COMMANDS: &[&str] = &[
     // the HUD page's (feature rust-core)
     "planet_start", "planet_resend", "planet_resize", "planet_pointer_down", "planet_pointer_move", "planet_pointer_up",
     "planet_pointer_cancel", "planet_key", "planet_train", "planet_kaioken", "planet_buy", "planet_learn", "planet_respec",
-    "planet_learn_angel", "planet_auto_next", "planet_pick_wish", "planet_pick_hero", "planet_menu", "planet_angels",
+    "planet_learn_angel", "planet_auto_next", "planet_wear", "planet_pick_wish", "planet_pick_hero", "planet_menu", "planet_angels",
     "planet_ascend_info", "planet_god_info", "planet_zeno_info", "planet_card", "planet_fps", "planet_itx", "planet_itx_jump",
     "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot", "planet_buy_n",
     "planet_shop_info", "planet_bulk",
