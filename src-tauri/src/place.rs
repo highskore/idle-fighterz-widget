@@ -178,8 +178,7 @@ impl Places {
             return;
         }
         remember(&mut list, key, x, y);
-        let _ = fs::create_dir_all(self.file.parent().unwrap());
-        let _ = fs::write(&self.file, serde_json::to_vec(&*list).unwrap());
+        let _ = crate::save(&self.file, &serde_json::to_vec(&*list).unwrap());
     }
 }
 

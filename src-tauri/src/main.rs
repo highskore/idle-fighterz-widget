@@ -109,6 +109,16 @@ impl Shown {
     fn wait(&self) {
         drop(self.changed.wait_while(self.on.lock().unwrap(), |s| !s.0));
     }
+    /// the count of changes so far, for `wait_change`
+    #[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+    fn changes(&self) -> u64 {
+        self.on.lock().unwrap().1
+    }
+    /// blocks until the widget shows or hides or the settings change, if none has since `changes` said `n`
+    #[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+    fn wait_change(&self, n: u64) {
+        drop(self.changed.wait_while(self.on.lock().unwrap(), |s| s.1 == n));
+    }
     /// blocks for `d` (None: for good), or until the widget shows or the settings change
     #[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
     fn nap(&self, d: Option<Duration>) {
@@ -136,11 +146,24 @@ fn initial_settings(saved: Option<&Value>) -> Value {
     if let Some(saved) = saved {
         merge(&mut settings, &prefs::migrate(saved));
     }
-    if ![7, 1, 2, 3, 6].contains(&settings["layout"].as_u64().unwrap_or(0)) {
+    if !prefs::LAYOUTS.contains(&settings["layout"].as_u64().unwrap_or(0)) {
         settings["layout"] = json!(7); // layouts 4 and 5 were dropped
     }
     prefs::known_look(&mut settings);
     settings
+}
+
+// to a temp file renamed into place, so a crash or a full disk mid-write leaves the old file whole
+fn save(file: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("json.tmp");
+    let done = fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, file));
+    if done.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    done
 }
 
 fn merge(base: &mut Value, over: &Value) {
@@ -229,13 +252,13 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
     if settings.get("size").is_some() {
         settings["size"] = json!(prefs::size(&settings["size"]) as u64);
     }
+    prefs::vet(&mut settings);
     let state = app.state::<State>();
     let was_style = state.settings.lock().unwrap()["settings_style"].clone();
     let s = {
         let mut cur = state.settings.lock().unwrap();
         merge(&mut cur, &settings);
-        let _ = fs::create_dir_all(state.file.parent().unwrap());
-        let _ = fs::write(&state.file, serde_json::to_vec_pretty(&*cur).unwrap());
+        let _ = save(&state.file, &serde_json::to_vec_pretty(&*cur).unwrap());
         cur.clone()
     };
     if let Some(on) = settings.get("login").and_then(Value::as_bool) {
@@ -293,7 +316,7 @@ fn bind(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
 // `resize`: snap to the size preset (on launch, and when the size or mode is picked); otherwise a window-mode window
 // keeps the size it was dragged to
 fn apply(app: &AppHandle, s: &Value, resize: bool) {
-    let win = app.get_webview_window("main").expect("main window");
+    let Some(win) = app.get_webview_window("main") else { return };
     let on_top = s["on_top"].as_bool().unwrap_or(true);
     let side = prefs::size(&s["size"]);
     let _ = win.set_always_on_top(on_top);
@@ -331,9 +354,9 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
 fn tray_profiles(app: &AppHandle, t: &Tray, s: &Value) {
     let names = prefs::names(s);
     let active = prefs::active(s);
-    let state = app.state::<State>();
-    let mut listed = state.tray_profiles.lock().unwrap();
-    if listed.as_ref() != Some(&names) {
+    // not held over the menu calls (see Tray): set_settings may get here off the main thread
+    let stale = app.state::<State>().tray_profiles.lock().unwrap().replace(names.clone()).as_ref() != Some(&names);
+    if stale {
         if let Ok(items) = t.profiles.items() {
             for item in items {
                 let _ = t.profiles.remove(&item);
@@ -354,7 +377,6 @@ fn tray_profiles(app: &AppHandle, t: &Tray, s: &Value) {
             let _ = t.profiles.append(&sep);
             let _ = t.profiles.append(&item);
         }
-        *listed = Some(names.clone());
     }
     if let Ok(items) = t.profiles.items() {
         for (item, name) in items.iter().filter_map(|i| i.as_check_menuitem()).zip(&names) {
@@ -436,7 +458,7 @@ fn tray_title(app: AppHandle, text: String) {
 }
 
 fn show_widget(app: &AppHandle, show: bool) {
-    let win = app.get_webview_window("main").expect("main window");
+    let Some(win) = app.get_webview_window("main") else { return };
     let _ = if show { win.show() } else { win.hide() }; // hidden, the page gets no animation frames and stops drawing
     // WebView2 doesn't hear that its window hid: unless told, the page stays "visible" and keeps drawing
     #[cfg(target_os = "windows")]
@@ -776,6 +798,11 @@ fn main() {
             }
         }
         (tauri::WindowEvent::Focused(false), popover::LABEL) => popover::blurred(w.app_handle()),
+        // Alt+F4 and the like hide the widget as the menu does: destroyed, it would be gone for good
+        (tauri::WindowEvent::CloseRequested { api, .. }, "main") => {
+            api.prevent_close();
+            show_widget(w.app_handle(), false);
+        }
         _ => {}
     });
     app.setup(|app| {
@@ -1190,7 +1217,9 @@ fn watch_taskbar(app: AppHandle, mut taskbar: Taskbar, mut white: bool) {
                 }
             }
         }
-        let _ = woken.recv_timeout(std::time::Duration::from_secs(3));
+        // a picked colour changes only with the pick
+        let auto = app.state::<State>().settings.lock().unwrap()["tray_icon"].as_str().unwrap_or("auto") == "auto";
+        let _ = if auto { woken.recv_timeout(std::time::Duration::from_secs(3)).ok() } else { woken.recv().ok() };
     });
 }
 
@@ -1388,6 +1417,25 @@ mod tests {
         assert!(compact.contains("login") && full.contains("login") && full.contains("permission"));
     }
 
+    // every command the app registers is in build.rs's list and granted to some window: one that isn't, the ACL refuses
+    // whatever page calls it (0.5.0's planet_wear)
+    #[test]
+    fn every_registered_command_is_built_and_granted() {
+        let list = |src: &str, from: &str| -> Vec<String> {
+            let body = src.split(from).nth(1).unwrap().split(']').next().unwrap();
+            body.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':')).filter(|w| !w.is_empty()).map(|w| w.rsplit("::").next().unwrap().to_string()).collect()
+        };
+        let mut commands = list(include_str!("main.rs"), "$($m)::+![");
+        commands.extend(list(include_str!("planet.rs"), "$($more,)*"));
+        assert!(commands.len() > 50 && commands.contains(&"planet_wear".to_string()), "{commands:?}");
+        let built = include_str!("../build.rs");
+        let granted = [include_str!("../capabilities/default.json"), include_str!("../capabilities/settings.json"), include_str!("../capabilities/popover.json")].concat();
+        for cmd in &commands {
+            assert!(built.contains(&format!("\"{cmd}\"")), "{cmd} isn't in build.rs's COMMANDS");
+            assert!(granted.contains(&format!("\"allow-{}\"", cmd.replace('_', "-"))), "no capability allows {cmd}");
+        }
+    }
+
     // with no handlers registered, a granted command fails as "not found" and any other is refused by the ACL first
     #[test]
     fn each_window_may_call_only_its_own_commands() {
@@ -1406,7 +1454,7 @@ mod tests {
             };
             !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
         };
-        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot", "planet_buy_n", "planet_shop_info", "planet_bulk"] {
+        for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot", "planet_buy_n", "planet_shop_info", "planet_bulk", "planet_wear"] {
             assert!(call(&main, cmd), "main may call {cmd}");
         }
         for cmd in ["set_settings", "quit", "open_notify_settings", "request_notify_permission", "snooze", "save_profile", "apply_profile", "delete_profile", "planet_step", "planet_load", "planet_save", "glance", "preview_frame", "tray_action", "hide_popover"] {

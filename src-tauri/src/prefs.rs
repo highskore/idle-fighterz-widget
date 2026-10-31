@@ -66,6 +66,21 @@ pub fn known_look(s: &mut Value) {
     }
 }
 
+/// the widget layouts there are (4 and 5 were dropped)
+pub const LAYOUTS: [u64; 5] = [7, 1, 2, 3, 6];
+
+/// an update (a page's, or a profile's) without a layout, skin or theme this version doesn't have: those keep their value
+pub fn vet(update: &mut Value) {
+    let Some(o) = update.as_object_mut() else { return };
+    let ok = |k: &str, v: &Value| match k {
+        "layout" => v.as_u64().is_some_and(|l| LAYOUTS.contains(&l)),
+        "skin" => v.as_str().is_some_and(|v| SKINS.contains(&v)),
+        "theme" => v.as_str().is_some_and(|v| THEMES.contains(&v)),
+        _ => true,
+    };
+    o.retain(|k, v| ok(k, v));
+}
+
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
 pub const PROFILE_KEYS: [&str; 25] = [
@@ -240,6 +255,19 @@ mod tests {
                 known_look(&mut s);
                 assert_eq!(s, json!({ "skin": skin, "theme": theme }), "kept");
             }
+        }
+    }
+
+    // a profile saved by a newer version (or edited by hand) can't set what this one doesn't have
+    #[test]
+    fn an_update_keeps_only_layouts_and_looks_there_are() {
+        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "size": 300 });
+        vet(&mut p);
+        assert_eq!(p, json!({ "size": 300 }));
+        for layout in LAYOUTS {
+            let mut p = json!({ "layout": layout, "skin": "drawer", "theme": "auto" });
+            vet(&mut p);
+            assert_eq!(p, json!({ "layout": layout, "skin": "drawer", "theme": "auto" }), "kept");
         }
     }
 
