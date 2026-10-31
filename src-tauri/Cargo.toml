@@ -39,10 +39,11 @@ block2 = "=0.6.2"
 objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-user-notifications = "=0.3.2"
-# the native renderer (feature native-renderer): a CALayer showing a framebuffer, and the stand-in PNG frames
+# the native renderer (feature native-renderer): a CALayer showing a framebuffer, and the stand-in PNG frames; and the
+# spectacles' overlay layers (with rust-core), rendered offscreen in their tests
 objc2-core-foundation = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2", "CGColorSpace", "CGDataProvider", "CGImage", "CGContext", "CGBitmapContext"] }
-objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "CALayer", "CATransaction"] }
+objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "CALayer", "CATransaction"] }
 # the layer under the HUD page (features rust-core and native-renderer): frames written into IOSurfaces, and the tick on
 # the efficiency cores with a timer that keeps it on time there
 objc2-io-surface = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }

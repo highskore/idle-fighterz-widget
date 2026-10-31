@@ -186,11 +186,14 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
       <label class="row" id="hiderow" data-s="auto_hide"><span>hide for fullscreen apps</span><input type="checkbox" data-k="auto_hide"></label>
       <label class="row" data-s="sound"><span>game sound</span><input type="checkbox" data-k="sound"></label>
       <label class="row" data-s="recap"><span>away recap <small>a toast when back</small></span><input type="checkbox" data-k="recap"></label>
+      <label class="row" data-s="raid_windows"><span>villain on your windows <small>raids</small></span><input type="checkbox" data-k="raid_windows"></label>
     </div><div>
       <label class="row" data-s="battery_auto"><span>saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
       <label class="row" data-s="login"><span>launch at login</span><input type="checkbox" data-k="login"></label>
+      <label class="row" data-s="screen_beam"><span>beam across the screen <small>full charge</small></span><input type="checkbox" data-k="screen_beam"></label>
       <div class="row" data-s="tray_style"><span><b class="barname">menu bar</b> click <small id="trayv"></small></span><div class="seg" data-seg="tray_style"><button data-v="menu">menu</button><button data-v="popover">popover</button></div></div>
     </div></div>
+    <p class="note" id="spnote" data-s="screen_beam">the villain and the beam never take clicks or focus, and sit out quiet hours, snoozes, battery saver, reduced motion and focus (where the system says). the villain only reads where your windows are: no screen recording.</p>
     <h2>profiles</h2>
     <div id="profiles"></div>
     <div class="row" data-s="profile"><input type="text" class="name" id="pname" placeholder="name, e.g. work" maxlength="24" aria-label="profile name" autocomplete="off" spellcheck="false"><button type="button" class="pill" id="psave">save current</button></div>
@@ -312,6 +315,9 @@ function render(v) {
   $('battv').textContent = s.battery_saving ? 'on now' : '';
   $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through' + (s.wayland ? '' : ', hold ' + (MAC ? '⌥' : 'alt'));
   $('hiderow').hidden = !!s.wayland;
+  // the spectacles need an overlay (macOS, Windows) and the game on the Rust core
+  for (const k of ['raid_windows', 'screen_beam']) document.querySelector(`[data-k="${k}"]`).disabled = !s.spectacle_ok;
+  if (!s.spectacle_ok) $('spnote').textContent = 'not on this system yet.';
   document.querySelector('[data-seg="mode"] [data-v="floating"]').disabled = s.transparent === false;
   $('nokeys').hidden = $('wlnote').hidden = !s.wayland; $('key').hidden = !!s.wayland; $('wlcmd').textContent = s.name.toLowerCase().replace(/ /g, '-');
   // linux's tray (AppIndicator) reports no clicks: only the menu

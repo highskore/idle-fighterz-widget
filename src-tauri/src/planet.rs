@@ -148,6 +148,12 @@ struct Paint {
     native: bool,
     /// time not yet stepped: drawn, the game steps here rather than in `Bridge::step`, so only a tick's last step draws
     bank: f64,
+    /// where the page's canvas is (`planet_view`), CSS pixels: the spectacles start from there
+    canvas: [f64; 4],
+    /// the last saga fight and full beam the spectacles were told of, and what they haven't taken yet
+    seen_boss: u32,
+    seen_beam: f64,
+    moments: Vec<Moment>,
 }
 
 impl Paint {
@@ -173,6 +179,40 @@ impl Paint {
         }
         n > 0
     }
+
+    // a saga villain's fight starting (his arrival over) and a full beam fired, each once, for the spectacles
+    fn spot(&mut self, g: &Game) {
+        let (fw, fh) = self.painter.size();
+        let [cx, cy, cw, ch] = self.canvas;
+        if fw <= 1 || cw <= 0.0 || ch <= 0.0 {
+            return;
+        }
+        let (kx, ky) = (cw / fw as f64, ch / fh as f64);
+        if let Some(b) = g.tl.boss.as_ref().filter(|b| b.saga && !b.uni && !b.movie && b.intro.is_none() && g.t >= b.go && !b.dead && !b.fled) {
+            if b.id != self.seen_boss {
+                self.seen_boss = b.id;
+                let name = if b.name == "past vegeta" { "vegeta" } else { b.name.as_str() };
+                let sprite = planet_core::data::VILLAINS.iter().position(|v| v.0 == name).and_then(|i| sprite::baked().get(&format!("VILLAINS.{i}.spr")));
+                if let Some(sprite) = sprite {
+                    self.moments.push(Moment::Raid { id: b.id, sprite, x: cx + b.x * kx, y: cy + b.y * ky });
+                }
+            }
+        }
+        if let Some(b) = g.inp.beam.as_ref().filter(|b| b.full && b.t0 != self.seen_beam) {
+            self.seen_beam = b.t0;
+            let (x, y, dx, dy) = (cx + b.x * kx, cy + b.y * ky, b.dx * kx, b.dy * ky);
+            self.moments.push(Moment::Beam { x, y, dx, dy, kame: g.kame(), ff: b.ff, kaio: b.kaio, ape: b.ape });
+        }
+    }
+}
+
+/// What the spectacles play (spectacle/), in the page's CSS pixels.
+pub enum Moment {
+    /// a saga villain's fight has started: boss `id`, standing at (`x`, `y`)
+    Raid { id: u32, sprite: &'static sprite::Sprite, x: f64, y: f64 },
+    /// a full-charge beam, from the hero's hand at (`x`, `y`) toward (`dx`, `dy`): a kamehameha (or else a galick gun),
+    /// a final flash, under kaioken or as the great ape
+    Beam { x: f64, y: f64, dx: f64, dy: f64, kame: bool, ff: bool, kaio: bool, ape: bool },
 }
 
 impl Core {
@@ -271,6 +311,7 @@ impl Core {
                 if !p.on {
                     b.step(elapsed, now_ms);
                 } else if p.step(b, elapsed, now_ms) {
+                    p.spot(&b.game);
                     self.publish(b, &p);
                     match self.surface.get().filter(|_| p.native) {
                         Some(s) => {
@@ -348,6 +389,21 @@ impl Core {
         let p = self.paint();
         let (w, h) = p.painter.size();
         (p.on && w > 1).then(|| (p.painter.rgba().to_vec(), w, h, p.painter.scale()))
+    }
+
+    /// What the shown game has done since last asked that the spectacles play.
+    pub fn moments(&self) -> Vec<Moment> {
+        std::mem::take(&mut self.paint().moments)
+    }
+
+    /// Whether boss `id`'s fight goes on (he hasn't been beaten or got away).
+    pub fn raid_on(&self, id: u32) -> bool {
+        self.with(|b| b.game.tl.boss.as_ref().is_some_and(|x| x.id == id && !x.dead && !x.fled)).unwrap_or(false)
+    }
+
+    /// Reduced motion, as the page said (`planet_view`'s `calm`).
+    pub fn calm(&self) -> bool {
+        self.with(|b| b.game.calm).unwrap_or(true)
     }
 
     /// The game as the away recap sees it.
@@ -514,6 +570,8 @@ pub struct Hooks {
     pub plays_hidden: fn(&AppHandle) -> bool,
     /// a hidden catch-up's power level and notifications
     pub hidden: fn(&AppHandle, Caught),
+    /// a raid or a full beam on the shown widget, for the spectacles
+    pub moment: fn(&AppHandle, Moment),
 }
 
 /// Steps the game and sends the HUD what changed, at the rate the page picks (widget.js: the frame-rate setting,
@@ -554,6 +612,9 @@ pub fn run(app: AppHandle, hooks: Hooks) {
                 last = now;
                 if let Some(msg) = core.tick(elapsed, now_ms()) {
                     let _ = app.emit_to("main", "planet", msg);
+                }
+                for m in core.moments() {
+                    (hooks.moment)(&app, m);
                 }
                 if saved.elapsed() >= Duration::from_secs(3) && core.with(|b| b.game.playing).unwrap_or(false) {
                     saved = Instant::now();
@@ -637,6 +698,7 @@ pub fn planet_view(core: State<'_, Core>, bare: bool, clouds: String, amount: f6
         b.set_calm(calm);
         let mut p = core.paint();
         p.painter.set_view(bare, clouds.chars().next(), amount);
+        p.canvas = [x, y, w, h];
         p.native = core.surface.get().is_some_and(|s| s.place([x, y, w, h], opacity, bare));
         p.on = true;
         p.native
@@ -1411,5 +1473,56 @@ mod tests {
         assert!(loadable(&format!("{{\"daily\":\"[[[{}\"}}", "[".repeat(40))), "brackets in a string are text");
         assert!(!loadable(&" ".repeat(MAX_SAVE + 1)));
         let _ = fs::remove_file(f);
+    }
+
+    // the shown game tells the spectacles once when a saga villain's fight starts and once a full beam, in the page's
+    // pixels; a beam short of full, nothing
+    #[test]
+    fn raids_and_full_beams_reach_the_spectacles_once() {
+        let core = Core::new(SEED, file("moments"));
+        core.with(|b| b.start("Wed Oct 28 2026", 1.7e12)).unwrap();
+        {
+            let mut p = core.paint();
+            p.painter.resize(SIZE.0, SIZE.1, SIZE.2);
+            (p.canvas, p.on) = ([10.0, 20.0, 266.0, 266.0], true);
+        }
+        let mut now = 1.7e12;
+        let mut tick = |core: &Core| {
+            now += 4.0 * DT * 1000.0;
+            core.tick(4.0 * DT, now);
+            core.moments()
+        };
+        let mut raids = Vec::new();
+        for _ in 0..(600.0 / (4.0 * DT)) as usize {
+            for m in tick(&core) {
+                if let Moment::Raid { id, x, y, sprite } = m {
+                    assert!((10.0..276.0).contains(&x) && (20.0..286.0).contains(&y), "on the canvas: {x},{y}");
+                    assert!(sprite.w > 10);
+                    raids.push(id);
+                }
+            }
+            if !raids.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(raids.len(), 1, "a saga raid within ten minutes");
+        let id = raids[0];
+        assert!(core.raid_on(id) && !core.raid_on(id + 1));
+        assert!(tick(&core).iter().all(|m| !matches!(m, Moment::Raid { .. })), "once");
+
+        let fire = |core: &Core, full: bool, t0: f64| {
+            core.with(|b| {
+                let beam = planet_core::input::Beam { t0, c: if full { 2.5 } else { 1.0 }, x: 60.0, y: 70.0, dx: 1.0, dy: 0.0, z: 0.0, ff: false, full, kaio: false, ape: false };
+                b.game.inp.beam = Some(beam);
+            })
+            .unwrap();
+        };
+        let t = core.with(|b| b.game.t).unwrap();
+        fire(&core, false, t);
+        assert!(tick(&core).is_empty(), "a short beam isn't one");
+        fire(&core, true, t + 0.01);
+        let ms = tick(&core);
+        assert!(matches!(ms[..], [Moment::Beam { x: 130.0, y: 160.0, dx: 2.0, dy: 0.0, .. }]), "the canvas is the buffer at 2×");
+        assert!(tick(&core).is_empty(), "once");
     }
 }

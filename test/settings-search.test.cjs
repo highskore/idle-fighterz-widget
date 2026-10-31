@@ -26,6 +26,8 @@ test('synonyms find settings by other names', () => {
   assert.ok(matches('preset', 'work', 'profile', 'profiles'));
   assert.ok(matches('zoom', 'size 400 · medium', 'size', 'widget'));
   assert.ok(!matches('zoom', 'opacity 100%', 'opacity', 'widget'));
+  assert.ok(matches('kamehameha', 'beam across the screen', 'screen_beam', 'widget'));
+  assert.ok(matches('spectacle', 'villain on your windows', 'raid_windows', 'widget'));
 });
 
 test('a section name keeps its rows', () => {

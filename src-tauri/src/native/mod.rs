@@ -129,7 +129,7 @@ pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>, fps: fn(&AppHandle)
 }
 
 // a premultiplied RGBA copy of the frame, owned by the image
-fn image(space: &CGColorSpace, w: u32, h: u32, rgba: &[u8]) -> CFRetained<CGImage> {
+pub(crate) fn image(space: &CGColorSpace, w: u32, h: u32, rgba: &[u8]) -> CFRetained<CGImage> {
     let mut px = rgba.to_vec().into_boxed_slice();
     for p in px.as_chunks_mut::<4>().0 {
         let a = p[3] as u16;

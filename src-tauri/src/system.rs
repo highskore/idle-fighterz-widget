@@ -100,6 +100,13 @@ pub fn on_battery(supplies: &[Supply]) -> bool {
     !charger && supplies.iter().any(|s| s.kind == "Battery" && s.scope != "Device" && s.status == "Discharging")
 }
 
+/// The windows on screen, front to back, in the screen's units (points on macOS, physical pixels on Windows), from the
+/// window list any app may read. None where there's no such list here (Linux: Wayland shows no app the others)
+#[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+pub fn windows() -> Option<Vec<Win>> {
+    os::windows()
+}
+
 fn setting<T>(app: &AppHandle, f: impl FnOnce(&Value) -> T) -> T {
     f(&app.state::<State>().settings.lock().unwrap())
 }
@@ -279,43 +286,56 @@ mod os {
         pub fn new(_wayland: bool) -> Self {
             Screen
         }
-        // the window list's bounds, owners and layers need no Screen Recording permission (only window titles do)
         pub fn busy(&mut self) -> Option<bool> {
-            unsafe {
-                let mut ids = [0u32; 16];
-                let mut n = 0;
-                if CGGetActiveDisplayList(16, ids.as_mut_ptr(), &mut n) != 0 {
-                    return None;
-                }
-                let displays: Vec<Rect> = ids[..n as usize]
+            Some(super::fullscreen(&windows()?, &displays()?, std::process::id() as i64))
+        }
+    }
+
+    /// the displays' bounds, in points with the origin at the top left of the main one
+    pub fn displays() -> Option<Vec<Rect>> {
+        unsafe {
+            let mut ids = [0u32; 16];
+            let mut n = 0;
+            if CGGetActiveDisplayList(16, ids.as_mut_ptr(), &mut n) != 0 {
+                return None;
+            }
+            Some(
+                ids[..n as usize]
                     .iter()
                     .map(|&d| {
                         let r = CGDisplayBounds(d);
                         Rect { x: r.x, y: r.y, w: r.w, h: r.h }
                     })
-                    .collect();
-                let list = CGWindowListCopyWindowInfo(1 | 16, 0); // on screen only, no desktop elements
-                if list.is_null() {
-                    return None;
-                }
-                let wins: Vec<Win> = (0..CFArrayGetCount(list))
-                    .map(|i| {
-                        let d = CFArrayGetValueAtIndex(list, i);
-                        let mut r = CGRect::default();
-                        CGRectMakeWithDictionaryRepresentation(CFDictionaryGetValue(d, kCGWindowBounds), &mut r);
-                        let owner = string(CFDictionaryGetValue(d, kCGWindowOwnerName)).unwrap_or_default();
-                        Win {
-                            pid: number(CFDictionaryGetValue(d, kCGWindowOwnerPID)).unwrap_or(-1.0) as i64,
-                            layer: number(CFDictionaryGetValue(d, kCGWindowLayer)).unwrap_or(-1.0) as i64,
-                            alpha: number(CFDictionaryGetValue(d, kCGWindowAlpha)).unwrap_or(1.0),
-                            rect: Rect { x: r.x, y: r.y, w: r.w, h: r.h },
-                            presenter: owner == "Keynote" || owner == "Microsoft PowerPoint",
-                        }
-                    })
-                    .collect();
-                CFRelease(list);
-                Some(super::fullscreen(&wins, &displays, std::process::id() as i64))
+                    .collect(),
+            )
+        }
+    }
+
+    /// the windows on screen, front to back. Their bounds, owners and layers need no Screen Recording permission
+    /// (only window titles do)
+    pub fn windows() -> Option<Vec<Win>> {
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(1 | 16, 0); // on screen only, no desktop elements
+            if list.is_null() {
+                return None;
             }
+            let wins: Vec<Win> = (0..CFArrayGetCount(list))
+                .map(|i| {
+                    let d = CFArrayGetValueAtIndex(list, i);
+                    let mut r = CGRect::default();
+                    CGRectMakeWithDictionaryRepresentation(CFDictionaryGetValue(d, kCGWindowBounds), &mut r);
+                    let owner = string(CFDictionaryGetValue(d, kCGWindowOwnerName)).unwrap_or_default();
+                    Win {
+                        pid: number(CFDictionaryGetValue(d, kCGWindowOwnerPID)).unwrap_or(-1.0) as i64,
+                        layer: number(CFDictionaryGetValue(d, kCGWindowLayer)).unwrap_or(-1.0) as i64,
+                        alpha: number(CFDictionaryGetValue(d, kCGWindowAlpha)).unwrap_or(1.0),
+                        rect: Rect { x: r.x, y: r.y, w: r.w, h: r.h },
+                        presenter: owner == "Keynote" || owner == "Microsoft PowerPoint",
+                    }
+                })
+                .collect();
+            CFRelease(list);
+            Some(wins)
         }
     }
 
@@ -384,6 +404,57 @@ mod os {
             let mut state = 0;
             (unsafe { SHQueryUserNotificationState(&mut state) } == 0).then(|| super::quns_busy(state))
         }
+    }
+
+    type Hwnd = *mut std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect32 {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(each: unsafe extern "system" fn(Hwnd, isize) -> i32, param: isize) -> i32;
+        fn IsWindowVisible(h: Hwnd) -> i32;
+        fn IsIconic(h: Hwnd) -> i32;
+        fn GetWindow(h: Hwnd, cmd: u32) -> Hwnd;
+        fn GetWindowLongW(h: Hwnd, index: i32) -> i32;
+        fn GetWindowTextLengthW(h: Hwnd) -> i32;
+        fn GetWindowThreadProcessId(h: Hwnd, pid: *mut u32) -> u32;
+        fn GetWindowRect(h: Hwnd, r: *mut Rect32) -> i32;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmGetWindowAttribute(h: Hwnd, attr: u32, out: *mut std::ffi::c_void, size: u32) -> i32;
+    }
+
+    // what Alt+Tab would list: shown, not minimized, not cloaked (another desktop, a suspended app), unowned, titled,
+    // not a tool window. Its frame without the invisible resize border. Topmost windows count as a layer above
+    unsafe extern "system" fn each(h: Hwnd, out: isize) -> i32 {
+        let out = &mut *(out as *mut Vec<super::Win>);
+        let ex = GetWindowLongW(h, -20) as u32; // GWL_EXSTYLE
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(h, 14, &mut cloaked as *mut u32 as *mut _, 4); // DWMWA_CLOAKED
+        if IsWindowVisible(h) == 0 || IsIconic(h) != 0 || cloaked != 0 || !GetWindow(h, 4).is_null() || GetWindowTextLengthW(h) == 0 || ex & 0x80 != 0 {
+            return 1;
+        }
+        let mut r = Rect32::default();
+        if DwmGetWindowAttribute(h, 9, &mut r as *mut Rect32 as *mut _, 16) != 0 && GetWindowRect(h, &mut r) == 0 {
+            return 1;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, &mut pid);
+        let rect = super::Rect { x: r.left as f64, y: r.top as f64, w: (r.right - r.left) as f64, h: (r.bottom - r.top) as f64 };
+        out.push(super::Win { pid: pid as i64, layer: if ex & 0x8 != 0 { 3 } else { 0 }, alpha: 1.0, rect, presenter: false });
+        1
+    }
+
+    pub fn windows() -> Option<Vec<super::Win>> {
+        let mut out: Vec<super::Win> = Vec::new();
+        (unsafe { EnumWindows(each, &mut out as *mut Vec<super::Win> as isize) } != 0).then_some(out)
     }
 
     pub struct Power;
@@ -476,6 +547,10 @@ mod os {
             }
             Some(x.list(active, x.atom("_NET_WM_STATE"), xlib::XA_ATOM).contains(&x.atom("_NET_WM_STATE_FULLSCREEN")))
         }
+    }
+
+    pub fn windows() -> Option<Vec<super::Win>> {
+        None
     }
 
     pub struct Power(Option<Option<zbus::blocking::Connection>>);

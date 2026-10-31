@@ -12,6 +12,25 @@ pub fn snoozed(until_ms: f64, now_ms: f64) -> bool {
     until_ms > now_ms
 }
 
+/// whether the quiet hours setting (`{on, from: "22:00", to: "08:00"}`) holds at `now`, minutes into the local day;
+/// a span past midnight wraps
+#[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+pub fn quiet_at(q: &serde_json::Value, now: u32) -> bool {
+    let mins = |hm: &serde_json::Value| {
+        let mut p = hm.as_str().unwrap_or("").split(':').map(|x| x.trim().parse::<u32>().unwrap_or(0));
+        p.next().unwrap_or(0) * 60 + p.next().unwrap_or(0)
+    };
+    let (a, b) = (mins(&q["from"]), mins(&q["to"]));
+    q["on"].as_bool().unwrap_or(false) && if a <= b { now >= a && now < b } else { now >= a || now < b }
+}
+
+#[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
+pub fn quiet_now(q: &serde_json::Value) -> bool {
+    use chrono::Timelike;
+    let t = chrono::Local::now();
+    quiet_at(q, t.hour() * 60 + t.minute())
+}
+
 // "until tomorrow" ends at this local time
 const MORNING: u32 = 8;
 
@@ -200,5 +219,16 @@ mod tests {
         assert_eq!(assertions_on("not json"), None);
         assert!(!quiet_profile(0));
         assert!(quiet_profile(1) && quiet_profile(2));
+    }
+
+    #[test]
+    fn quiet_hours_wrap_past_midnight() {
+        let q = |on, from: &str, to: &str| serde_json::json!({ "on": on, "from": from, "to": to });
+        let night = q(true, "22:00", "08:00");
+        assert!(quiet_at(&night, 23 * 60) && quiet_at(&night, 7 * 60 + 59) && quiet_at(&night, 22 * 60));
+        assert!(!quiet_at(&night, 8 * 60) && !quiet_at(&night, 12 * 60));
+        let lunch = q(true, "12:00", "13:30");
+        assert!(quiet_at(&lunch, 12 * 60 + 45) && !quiet_at(&lunch, 13 * 60 + 30));
+        assert!(!quiet_at(&q(false, "00:00", "23:59"), 600), "off");
     }
 }

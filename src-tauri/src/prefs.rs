@@ -68,9 +68,9 @@ pub fn known_look(s: &mut Value) {
 
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 23] = [
+pub const PROFILE_KEYS: [&str; 25] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
-    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style",
+    "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style", "raid_windows", "screen_beam",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
