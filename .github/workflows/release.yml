@@ -60,7 +60,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            saver
           key: ${{ matrix.platform }}
 
       - name: linux build dependencies
@@ -99,7 +101,8 @@ jobs:
 
       # ---- macOS and Windows: compiled here, signed and packaged by package-macos and package-windows ----
 
-      # the app, ad-hoc signed (tauri.conf.json's signingIdentity "-"), as a zip that keeps its symlinks and modes
+      # the app with the screensaver in its Resources (scripts/release.sh builds both), ad-hoc signed (tauri.conf.json's
+      # signingIdentity "-"), as a zip that keeps its symlinks and modes
       - name: build (macOS)
         if: matrix.platform == 'macos'
         env:
@@ -108,16 +111,22 @@ jobs:
           scripts/release.sh build
           ditto -c -k --keepParent "src-tauri/target/$TARGET/release/bundle/macos/Idle FighterZ.app" "$RUNNER_TEMP/app.zip"
 
+      # the exe and the screensaver (the saver's exe, as IdleFighterZ.scr), both unsigned, side by side
       - name: build (Windows)
         if: matrix.platform == 'windows'
         shell: bash
-        run: npx tauri build --no-bundle
+        run: |
+          npx tauri build --no-bundle
+          cargo build --release --manifest-path saver/Cargo.toml --bin idle-fighterz-saver
+          mkdir "$RUNNER_TEMP/windows"
+          cp src-tauri/target/release/idle-fighterz.exe "$RUNNER_TEMP/windows/"
+          cp saver/target/release/idle-fighterz-saver.exe "$RUNNER_TEMP/windows/IdleFighterZ.scr"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: matrix.platform != 'linux'
         with:
           name: unsigned-${{ matrix.platform }}
-          path: ${{ matrix.platform == 'macos' && format('{0}/app.zip', runner.temp) || 'src-tauri/target/release/idle-fighterz.exe' }}
+          path: ${{ matrix.platform == 'macos' && format('{0}/app.zip', runner.temp) || format('{0}/windows', runner.temp) }}
           if-no-files-found: error
 
       # ---- Linux ----
@@ -200,6 +209,7 @@ jobs:
           ditto -x -k "$Z" "$D"
           [ "$(ls -A "$D")" = 'Idle FighterZ.app' ] || { echo "::error::app.zip unpacked to more than the app"; exit 1; }
           if find "$D" -type l | grep .; then echo "::error::a symlink after unpacking (above)"; exit 1; fi
+          [ -d "$D/Idle FighterZ.app/Contents/Resources/Idle FighterZ.saver" ] || { echo "::error::the app has no screensaver"; exit 1; }
           codesign --verify --strict --deep "$D/Idle FighterZ.app"
           echo "APP=$D/Idle FighterZ.app" >> "$GITHUB_ENV"
           echo "OUT=$RUNNER_TEMP/release" >> "$GITHUB_ENV"
@@ -267,29 +277,32 @@ jobs:
             ${{ runner.temp }}/release/*.zip
           if-no-files-found: error
 
-  # bundles the exe build compiled, on a fresh runner that has run none of the build's code. The installers embed the
-  # exe, and tauri patches it per installer (the bundle type, for its updater) before packing it, so it must sign the
-  # exe after that patch: `tauri bundle` signs the exe, the -setup.exe and the .msi by thumbprint (signtool,
-  # timestamped). The certificate is in the store only for that step; no cargo build, build script or npm install
-  # script runs in this job, and the app itself runs only after the certificate is gone
+  # bundles the exe and the screensaver build compiled, on a fresh runner that has run none of the build's code. The
+  # installers embed the exe, and tauri patches it per installer (the bundle type, for its updater) before packing it,
+  # so it must sign the exe after that patch: `tauri bundle` signs the exe, the -setup.exe and the .msi by thumbprint
+  # (signtool, timestamped). The .scr is a resource, which tauri doesn't sign, so signtool signs it first, the same
+  # way. The certificate is in the store only for those steps; no cargo build, build script or npm install script
+  # runs in this job, and the app itself runs only after the certificate is gone
   package-windows:
     needs: build
     runs-on: windows-latest
     environment: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && 'release' || '' }}
     steps:
-      # the exe comes from the build job, so it's untrusted input: downloaded outside the checkout before there is one,
-      # and only a single plain file of the expected name is copied in, by the step after the checkout
+      # the exe and the .scr come from the build job, so they're untrusted input: downloaded outside the checkout before
+      # there is one, and only two plain files of the expected names are copied in, by the step after the checkout
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unsigned-windows
           path: ${{ runner.temp }}/unsigned
 
-      - name: check the exe
+      - name: check the exe and the .scr
         shell: powershell
         run: |
           $files = @(Get-ChildItem -Recurse -Force "$env:RUNNER_TEMP\unsigned")
-          if ($files.Count -ne 1 -or $files[0].Name -ne 'idle-fighterz.exe' -or $files[0].PSIsContainer -or ($files[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            $files | Format-List FullName, Attributes; throw 'unsigned-windows must hold idle-fighterz.exe alone, as a plain file'
+          $plain = @($files | Where-Object { -not $_.PSIsContainer -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
+          $missing = @('idle-fighterz.exe', 'IdleFighterZ.scr' | Where-Object { $_ -cnotin $plain.Name })
+          if ($files.Count -ne 2 -or $plain.Count -ne 2 -or $missing.Count) {
+            $files | Format-List FullName, Attributes; throw 'unsigned-windows must hold idle-fighterz.exe and IdleFighterZ.scr alone, as plain files'
           }
 
       # tauri.conf.json, the icons, and the game's path crates that cargo metadata wants; nothing here is compiled
@@ -306,11 +319,13 @@ jobs:
       - name: tauri CLI
         run: npm ci --no-audit --no-fund --ignore-scripts
 
-      - name: put the exe where tauri bundles it from
+      # the .scr where saver/tauri.windows.json takes it from
+      - name: put the exe and the .scr where tauri bundles them from
         shell: powershell
         run: |
-          $null = New-Item -ItemType Directory -Force src-tauri\target\release
+          $null = New-Item -ItemType Directory -Force src-tauri\target\release, saver\build
           Copy-Item "$env:RUNNER_TEMP\unsigned\idle-fighterz.exe" src-tauri\target\release\idle-fighterz.exe
+          Copy-Item "$env:RUNNER_TEMP\unsigned\IdleFighterZ.scr" saver\build\IdleFighterZ.scr
 
       # the code-signing certificate goes into the runner user's store, its private key not exportable
       - name: import code-signing certificate (Windows)
@@ -333,10 +348,24 @@ jobs:
           @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii $conf
           "SIGN_CONFIG=$conf" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      # as tauri signs the exe: the imported certificate by thumbprint, sha256, an RFC 3161 timestamp
+      - name: sign the screensaver (Windows)
+        if: steps.cert.outputs.thumbprint != ''
+        shell: powershell
+        env:
+          THUMBPRINT: ${{ steps.cert.outputs.thumbprint }}
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object { [version]$_.Directory.Parent.Name } | Select-Object -Last 1
+          if (-not $signtool) { throw 'no signtool.exe in the Windows SDK' }
+          & $signtool.FullName sign /sha1 $env:THUMBPRINT /s My /fd sha256 /tr http://timestamp.digicert.com /td sha256 saver\build\IdleFighterZ.scr
+          if ($LASTEXITCODE) { throw 'signing IdleFighterZ.scr failed' }
+          & $signtool.FullName verify /pa saver\build\IdleFighterZ.scr
+          if ($LASTEXITCODE) { throw "IdleFighterZ.scr's signature doesn't verify" }
+
       - name: bundle and sign (Windows)
         shell: bash
         run: |
-          npx tauri bundle ${SIGN_CONFIG:+--config "$SIGN_CONFIG"}
+          npx tauri bundle --config saver/tauri.windows.json ${SIGN_CONFIG:+--config "$SIGN_CONFIG"}
           B=src-tauri/target/release/bundle
           mkdir -p release
           cp "$B"/nsis/*-setup.exe "$B"/msi/*.msi release/
@@ -357,6 +386,8 @@ jobs:
       # hidden, and the Rust core must keep the game going (the tray number is on by default)
       - name: smoke test (Windows)
         shell: powershell
+        env:
+          SIGNED: ${{ steps.cert.outputs.thumbprint != '' && 'true' || '' }}
         run: |
           $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
           # Scoop unpacks this same installer with 7-Zip (packaging/scoop/idle-fighterz.json): the app must sit at its root
@@ -366,6 +397,10 @@ jobs:
           $exe = Get-ChildItem "$env:LOCALAPPDATA\Idle FighterZ\*.exe" | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
           if (-not $exe) { throw 'nothing installed in %LOCALAPPDATA%\Idle FighterZ' }
           "installed $($exe.FullName)"
+          # beside the exe is the app's resource dir, where the tray's Install Screensaver… looks for it
+          $scr = Join-Path $exe.DirectoryName 'IdleFighterZ.scr'
+          if (-not (Test-Path $scr -PathType Leaf)) { Get-ChildItem $exe.DirectoryName; throw 'no IdleFighterZ.scr installed beside the exe' }
+          if ($env:SIGNED -and (Get-AuthenticodeSignature $scr).Status -ne 'Valid') { throw 'the installed IdleFighterZ.scr is not validly signed' }
           $env:IDLE_FIGHTERZ_SMOKE = "$env:RUNNER_TEMP\smoke.log"
           $p = Start-Process $exe.FullName -PassThru
           Remove-Item Env:IDLE_FIGHTERZ_SMOKE

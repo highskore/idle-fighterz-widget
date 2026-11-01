@@ -42,7 +42,7 @@ The threat: another local user, or any process, squatting the port or pipe to fe
   - `stopAnimation` sometimes never comes: the Rust side closes the link once nothing has polled it for 2 s, so the widget stops drawing for it either way, and the demo only steps when polled.
   - The view also tears down when it leaves its window.
 - **Install, no admin.** Builds that carry the screensaver have **Install Screensaver…** in the tray menu. It copies `Idle FighterZ.app/Contents/Resources/Idle FighterZ.saver` to `~/Library/Screen Savers/` (replacing an older copy, via a temporary copy so a failed copy leaves the old one) and opens System Settings → Screen Saver, where you pick it. It never changes the selected screensaver itself.
-- **Signing.** `build.sh` signs ad-hoc, which runs locally and in CI. A notarized release needs the `.saver` signed with the Developer ID and hardened runtime before Tauri bundles it, or notarization rejects the app; the release workflow doesn't do that yet, so release builds don't carry the screensaver yet (see below).
+- **Signing.** `build.sh` signs ad-hoc, which runs locally and in CI. In a release, `scripts/release.sh sign` signs the `.saver` inside the app (`Contents/Resources`) with the Developer ID and hardened runtime, timestamped, before the app's own binaries and the app, so notarization accepts the app with it (see Shipping).
 
 ### Windows
 
@@ -75,4 +75,11 @@ saver/macos/build.sh && npx tauri build --config saver/tauri.macos.json        #
 npx tauri build --config saver/tauri.windows.json                              # Windows, after building the .scr into saver/build
 ```
 
-The release workflow doesn't do this yet: on macOS the `.saver` has to be signed with the Developer ID first (see Signing), which is a change to the signed release path for a separate PR.
+## Shipping
+
+Every release carries it (`.github/workflows/release.yml`, docs/RELEASING.md), on the sign-after-build path the app already takes:
+
+- **macOS.** The `build` job (no secrets) runs `scripts/release.sh build`, which builds the universal `.saver` with `build.sh` and the app with `saver/tauri.macos.json`, so the app's zip holds `Contents/Resources/Idle FighterZ.saver`, ad-hoc signed. `package-macos` refuses an app without it, then `release.sh sign` signs the `.saver`, the app's binaries and the app with the Developer ID, and the app is notarized and packed as before. With no certificate (a PR) it stays ad-hoc signed.
+- **Windows.** The `build` job compiles the `.scr` next to the exe and uploads both, unsigned. `package-windows` accepts exactly those two plain files, puts the `.scr` in `saver/build/`, signs it with `signtool` by the imported certificate's thumbprint (as tauri signs the exe; skipped with no certificate) and bundles with `saver/tauri.windows.json`, so the installers put `IdleFighterZ.scr` beside `idle-fighterz.exe`. The smoke test checks it's installed there, and validly signed when the build is.
+
+Either way the tray's **Install Screensaver…** appears, since `screensaver::bundled` finds the file in the app's resource dir.
