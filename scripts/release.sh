@@ -10,6 +10,7 @@
 #     APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID               an Apple ID with an app-specific password
 #   TARGET                   universal-apple-darwin (default), aarch64-apple-darwin or x86_64-apple-darwin
 #   JOBS                     cargo jobs (default: all cores)
+#   APP, OUT                 sign and package this .app (default: the one build made), into OUT (default: release)
 #
 #   scripts/release.sh [build|sign|package]   all three by default. build only ad-hoc signs; sign uses the Developer
 #                                             ID, with codesign alone. CI runs build in a job with no secrets and sign
@@ -27,7 +28,7 @@ ARCH=${TARGET%%-*}
 [ "$ARCH" = aarch64 ] && ARCH=arm64
 [ "$ARCH" = x86_64 ] && ARCH=x64
 NAME="${PRODUCT// /}_${VERSION}_${ARCH}"
-OUT=release
+OUT=${OUT:-release}
 
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   security find-identity -v -p codesigning | grep -qF "$APPLE_SIGNING_IDENTITY" || { echo "no signing identity \"$APPLE_SIGNING_IDENTITY\" in the keychain" >&2; exit 1; }
@@ -40,7 +41,7 @@ else
   echo "APPLE_SIGNING_IDENTITY unset: ad-hoc signed, not notarized" >&2; NOTARY=()
 fi
 
-APP="src-tauri/target/$TARGET/release/bundle/macos/$PRODUCT.app"
+APP=${APP:-"src-tauri/target/$TARGET/release/bundle/macos/$PRODUCT.app"}
 if [ "$STAGE" = all ] || [ "$STAGE" = build ]; then
   case "$TARGET" in
     universal-apple-darwin) rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null ;;
