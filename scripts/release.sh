@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds the app (named by productName in tauri.conf.json), signs it with your Developer ID (hardened runtime), notarizes and staples it, and packs a
-# .dmg and a .zip with their sha256 sums into release/. See README.md, "Releasing".
+# Builds the app (named by productName in tauri.conf.json) with the screensaver inside it, signs both with your
+# Developer ID (hardened runtime), notarizes and staples it, and packs a .dmg and a .zip with their sha256 sums into
+# release/. See README.md, "Releasing".
 #
 #   APPLE_SIGNING_IDENTITY   "Developer ID Application: Your Name (TEAMID)", in your keychain. Unset: ad-hoc signed,
 #                            not notarized (runs here; elsewhere it needs right-click → Open)
@@ -49,21 +50,33 @@ if [ "$STAGE" = all ] || [ "$STAGE" = build ]; then
   esac
   [ -d node_modules ] || npm ci --no-audit --no-fund
   npm run -s page
-  # tauri only ad-hoc signs (signingIdentity "-"); the Developer ID signature and notarizing come below, with codesign
-  # and notarytool, so no certificate or notary credential is around while the build runs
-  env -u APPLE_SIGNING_IDENTITY -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
-    -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
-    ${JOBS:+CARGO_BUILD_JOBS=$JOBS} npx tauri build --bundles app --target "$TARGET"
+  case "$TARGET" in
+    universal-apple-darwin) SAVER_ARCHS="arm64 x86_64" ;;
+    aarch64-*) SAVER_ARCHS=arm64 ;;
+    *) SAVER_ARCHS=x86_64 ;;
+  esac
+  # tauri and build.sh only ad-hoc sign (signingIdentity "-"); the Developer ID signature and notarizing come below,
+  # with codesign and notarytool, so no certificate or notary credential is around while the build runs. The
+  # screensaver is built first: saver/tauri.macos.json puts it in the app's Resources
+  quiet() {
+    env -u APPLE_SIGNING_IDENTITY -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
+      -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH "$@"
+  }
+  quiet ARCHS="$SAVER_ARCHS" ${JOBS:+JOBS=$JOBS} saver/macos/build.sh
+  quiet ${JOBS:+CARGO_BUILD_JOBS=$JOBS} npx tauri build --bundles app --target "$TARGET" --config saver/tauri.macos.json
+  [ -d "$APP/Contents/Resources/Idle FighterZ.saver" ] || { echo "no screensaver in $APP" >&2; exit 1; }
   codesign --verify --strict --deep "$APP"
 fi
 [ "$STAGE" = build ] && exit 0
 [ -d "$APP" ] || { echo "no $APP: run scripts/release.sh build first" >&2; exit 1; }
 
-# what tauri would sign, inside out: the binaries in Contents/MacOS, then the app, under the hardened runtime
+# inside out, under the hardened runtime: the screensaver bundle in Resources (tauri doesn't sign it), what tauri
+# would sign (the binaries in Contents/MacOS), then the app
 if [ "$STAGE" != package ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   [ ! -e "$APP/Contents/Frameworks" ] || { echo "$APP has Frameworks: sign them here too" >&2; exit 1; }
   xattr -cr "$APP"
-  for f in "$APP"/Contents/MacOS/* "$APP"; do
+  shopt -s nullglob
+  for f in "$APP"/Contents/Resources/*.saver "$APP"/Contents/MacOS/* "$APP"; do
     codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
   done
   codesign --verify --strict --deep "$APP"
