@@ -47,3 +47,8 @@ test('the skin and theme rows have their own names', () => {
   assert.ok(matches('capsule corp', 'skin classic scouter capsule drawer', 'skin', 'widget'));
   assert.ok(!matches('dark mode', 'opacity 100%', 'opacity', 'widget'));
 });
+
+test('the ki buttons row answers to its abilities', () => {
+  for (const q of ['ki', 'kaioken', 'meter', 'buttons', 'instant transmission']) assert.ok(matches(q, 'ki buttons classic ki meter', 'ki_buttons', 'widget'), q);
+  assert.ok(!matches('kaioken', 'opacity 100%', 'opacity', 'widget'));
+});

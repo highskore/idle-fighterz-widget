@@ -56,10 +56,13 @@ pub fn popover(style: &Value) -> bool {
 /// the HUD skins and themes the widget page knows (game/skins.js); anything else reads as today's look
 pub const SKINS: [&str; 4] = ["classic", "scouter", "capsule", "drawer"];
 pub const THEMES: [&str; 3] = ["light", "dark", "auto"];
+/// the ability buttons' looks (game/widget.css `data-kibtn`): the ki meter (the default) fills as they recharge, classic
+/// counts down
+pub const KI_BUTTONS: [&str; 2] = ["meter", "classic"];
 
-/// a skin or theme this version doesn't know (a newer one's, or a typo) goes back to classic and light
+/// a skin, theme or ki buttons look this version doesn't know (a newer one's, or a typo) goes back to the default
 pub fn known_look(s: &mut Value) {
-    for (key, known, fallback) in [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light")] {
+    for (key, known, fallback) in [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light"), ("ki_buttons", &KI_BUTTONS[..], "meter")] {
         if !s[key].as_str().is_some_and(|v| known.contains(&v)) {
             s[key] = json!(fallback);
         }
@@ -76,6 +79,7 @@ pub fn vet(update: &mut Value) {
         "layout" => v.as_u64().is_some_and(|l| LAYOUTS.contains(&l)),
         "skin" => v.as_str().is_some_and(|v| SKINS.contains(&v)),
         "theme" => v.as_str().is_some_and(|v| THEMES.contains(&v)),
+        "ki_buttons" => v.as_str().is_some_and(|v| KI_BUTTONS.contains(&v)),
         _ => true,
     };
     o.retain(|k, v| ok(k, v));
@@ -83,9 +87,10 @@ pub fn vet(update: &mut Value) {
 
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 25] = [
+pub const PROFILE_KEYS: [&str; 26] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
     "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style", "raid_windows", "screen_beam",
+    "ki_buttons",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
@@ -205,7 +210,7 @@ mod tests {
             "mode": "floating", "fps": 30, "ghost": false, "auto_hide": true, "battery_auto": true, "menubar_power": true,
             "notify": { "raid": true, "pod": false }, "quiet": { "on": false, "from": "22:00", "to": "08:00" }, "follow_focus": true, "recap": true,
             "sound": null, "shortcut": "Alt+Cmd+KeyP", "login": false, "profiles": [], "snooze_until": 0, "skin": "classic", "theme": "light",
-            "settings_style": "compact", "tray_style": "menu", "onboarded": true,
+            "ki_buttons": "classic", "settings_style": "compact", "tray_style": "menu", "onboarded": true,
         })
     }
 
@@ -217,6 +222,7 @@ mod tests {
         s["notify"]["raid"] = json!(false);
         s["skin"] = json!("drawer");
         s["theme"] = json!("dark");
+        s["ki_buttons"] = json!("meter");
         s["profiles"] = save(&s, " Work ").unwrap();
         let work = s.clone();
         s["size"] = json!(560.0);
@@ -224,6 +230,7 @@ mod tests {
         s["ghost"] = json!(false);
         s["skin"] = json!("scouter");
         s["theme"] = json!("auto");
+        s["ki_buttons"] = json!("classic");
         s["shortcut"] = json!("Alt+Cmd+KeyO");
         s["profiles"] = save(&s, "Play").unwrap();
         assert_eq!(names(&s), ["Work", "Play"]);
@@ -233,7 +240,7 @@ mod tests {
         assert!(p.get("shortcut").is_none() && p.get("profiles").is_none() && p.get("sound").is_none() && p.get("onboarded").is_none(), "{p}");
         crate::merge(&mut s, &p);
         assert_eq!(active(&s).as_deref(), Some("Work"));
-        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("dark")), "a profile carries the look");
+        assert_eq!((s["skin"].clone(), s["theme"].clone(), s["ki_buttons"].clone()), (json!("drawer"), json!("dark"), json!("meter")), "a profile carries the look");
         for k in PROFILE_KEYS.iter().filter(|k| **k != "sound") {
             assert!(same(&s[*k], &work[*k]), "{k}: {} vs {}", s[*k], work[*k]);
         }
@@ -243,17 +250,19 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_skin_or_theme_is_todays_look() {
-        for (skin, theme) in [(json!("manga"), json!("sepia")), (json!(3), json!(null)), (json!(""), json!(true))] {
-            let mut s = json!({ "skin": skin, "theme": theme });
+    fn an_unknown_skin_theme_or_ki_buttons_is_the_default() {
+        for (skin, theme, ki) in [(json!("manga"), json!("sepia"), json!("gauge")), (json!(3), json!(null), json!(2)), (json!(""), json!(true), json!(null))] {
+            let mut s = json!({ "skin": skin, "theme": theme, "ki_buttons": ki });
             known_look(&mut s);
-            assert_eq!(s, json!({ "skin": "classic", "theme": "light" }));
+            assert_eq!(s, json!({ "skin": "classic", "theme": "light", "ki_buttons": "meter" }));
         }
         for skin in SKINS {
             for theme in THEMES {
-                let mut s = json!({ "skin": skin, "theme": theme });
-                known_look(&mut s);
-                assert_eq!(s, json!({ "skin": skin, "theme": theme }), "kept");
+                for ki in KI_BUTTONS {
+                    let mut s = json!({ "skin": skin, "theme": theme, "ki_buttons": ki });
+                    known_look(&mut s);
+                    assert_eq!(s, json!({ "skin": skin, "theme": theme, "ki_buttons": ki }), "kept");
+                }
             }
         }
     }
@@ -261,13 +270,13 @@ mod tests {
     // a profile saved by a newer version (or edited by hand) can't set what this one doesn't have
     #[test]
     fn an_update_keeps_only_layouts_and_looks_there_are() {
-        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "size": 300 });
+        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "ki_buttons": "gauge", "size": 300 });
         vet(&mut p);
         assert_eq!(p, json!({ "size": 300 }));
         for layout in LAYOUTS {
-            let mut p = json!({ "layout": layout, "skin": "drawer", "theme": "auto" });
+            let mut p = json!({ "layout": layout, "skin": "drawer", "theme": "auto", "ki_buttons": "meter" });
             vet(&mut p);
-            assert_eq!(p, json!({ "layout": layout, "skin": "drawer", "theme": "auto" }), "kept");
+            assert_eq!(p, json!({ "layout": layout, "skin": "drawer", "theme": "auto", "ki_buttons": "meter" }), "kept");
         }
     }
 
