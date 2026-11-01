@@ -22,7 +22,7 @@ mod prefs;
 mod system;
 #[cfg(target_os = "macos")]
 mod notes;
-#[cfg(all(target_os = "macos", feature = "native-renderer"))]
+#[cfg(all(target_os = "macos", feature = "native-renderer", feature = "rust-core"))]
 mod native;
 #[cfg(feature = "rust-core")]
 mod photo;
@@ -871,11 +871,6 @@ fn main() {
                 place::watch(app.handle(), app.path().app_config_dir()?.join("places.json"));
             }
             system::watch(app.handle(), wayland);
-            // a hidden setting, read straight from the file: it isn't in DEFAULTS, so settings never save it
-            #[cfg(all(target_os = "macos", feature = "native-renderer"))]
-            if let Some(src) = saved.as_ref().and_then(native::wanted) {
-                native::start(app.handle(), src, fps)?;
-            }
             #[cfg(debug_assertions)]
             debug_open(app.handle());
             if std::env::var_os("IDLE_FIGHTERZ_SMOKE").is_some() {
@@ -920,7 +915,7 @@ fn hud_url(page: &tauri::Url, https: bool) -> tauri::Url {
 }
 
 // the frame-rate setting: 15, 30 (the default) or 60, and 15 in place of 30 while the battery saver is on
-#[cfg_attr(not(any(feature = "rust-core", all(target_os = "macos", feature = "native-renderer"))), allow(dead_code))]
+#[cfg_attr(not(feature = "rust-core"), allow(dead_code))]
 fn fps(app: &AppHandle) -> f64 {
     let s = app.state::<State>().settings.lock().unwrap().clone();
     let pick = s["fps"].as_f64().filter(|f| [15.0, 30.0, 60.0].contains(f)).unwrap_or(30.0);

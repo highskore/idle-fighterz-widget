@@ -77,14 +77,14 @@ jobs:
           npm run -s page
           npm test
 
-      # what ships (the default features), and the other builds still in the code: 0.1's web-view game (none), the
-      # canvas path alone (rust-core) and the stand-in sources (native-renderer). A tag's commit has been through this
+      # what ships (the default features), and the other builds still in the code: 0.1's web-view game (none) and the
+      # canvas path alone (rust-core). A tag's commit has been through this
       - name: cargo test and clippy, every feature (macOS)
         if: matrix.platform == 'macos' && !startsWith(github.ref, 'refs/tags/')
         working-directory: src-tauri
         run: |
           cargo test
-          for f in rust-core,native-renderer '' rust-core native-renderer; do
+          for f in rust-core,native-renderer '' rust-core; do
             echo "--- clippy ${f:-no features}"
             cargo clippy --all-targets --no-default-features ${f:+--features $f} -- -D warnings
           done
