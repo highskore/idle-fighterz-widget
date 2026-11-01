@@ -43,7 +43,7 @@ const DEFAULTS: &str = r#"{
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true, "raid_windows": false, "screen_beam": false,
   "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
-  "shortcut": "Alt+Cmd+KeyP",
+  "ki_buttons": "meter", "shortcut": "Alt+Cmd+KeyP",
   "settings_style": "compact", "tray_style": "menu", "onboarded": false
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -1367,11 +1367,11 @@ mod tests {
         assert_eq!(s["size"], json!(400));
         assert_eq!((s["follow_focus"].clone(), s["recap"].clone(), s["snooze_until"].clone()), (json!(true), json!(true), json!(0)));
         assert_eq!((s["sound"].clone(), s["profiles"].clone()), (json!(null), json!([])));
-        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "today's look");
-        let s = super::initial_settings(Some(&json!({ "skin": "drawer", "theme": "auto" })));
-        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("drawer"), json!("auto")));
-        let s = super::initial_settings(Some(&json!({ "skin": "manga", "theme": "sepia" })));
-        assert_eq!((s["skin"].clone(), s["theme"].clone()), (json!("classic"), json!("light")), "one this version doesn't know");
+        assert_eq!((s["skin"].clone(), s["theme"].clone(), s["ki_buttons"].clone()), (json!("classic"), json!("light"), json!("meter")), "today's look");
+        let s = super::initial_settings(Some(&json!({ "skin": "drawer", "theme": "auto", "ki_buttons": "classic" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone(), s["ki_buttons"].clone()), (json!("drawer"), json!("auto"), json!("classic")), "a saved pick stays");
+        let s = super::initial_settings(Some(&json!({ "skin": "manga", "theme": "sepia", "ki_buttons": "gauge" })));
+        assert_eq!((s["skin"].clone(), s["theme"].clone(), s["ki_buttons"].clone()), (json!("classic"), json!("light"), json!("meter")), "one this version doesn't know");
         let profiles = json!([{ "name": "Work", "settings": { "size": 300, "ghost": true } }]);
         let s = super::initial_settings(Some(&json!({ "size": 452, "sound": true, "profiles": profiles })));
         assert_eq!((s["size"].clone(), s["sound"].clone(), s["profiles"].clone()), (json!(452), json!(true), profiles));
