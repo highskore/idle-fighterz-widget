@@ -86,7 +86,7 @@ function ico(icon) {
 }
 
 const icon = ball()
-for (const [name, s] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.png', 256], ['icon.png', 1024]]) writeFileSync(join(out, name), png(scale(icon, s)))
+for (const [name, s] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.png', 256]]) writeFileSync(join(out, name), png(scale(icon, s)))
 writeFileSync(join(out, 'icon.icns'), icns(icon))
 writeFileSync(join(out, 'icon.ico'), ico(icon))
 writeFileSync(join(out, 'tray.png'), png(tray()))

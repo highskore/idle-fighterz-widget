@@ -1,132 +1,19 @@
-// The native renderer (cargo feature `native-renderer`, then `"native_renderer": "planet"` or `"pattern"` in
-// settings.json): the main window's web view is emptied and hidden, and a CALayer in its place shows a FrameSource's
-// framebuffer. Core Animation scales it on the GPU, nearest-neighbour by a whole factor, with its alpha over the
-// wallpaper; a new image goes up only when the frame changed. With rust-core too, `"native_renderer": "core"` shows
-// the game planet-render draws in a layer under the HUD page instead (`Under`). See NATIVE.md.
-mod source;
-#[cfg(feature = "rust-core")]
+// The native renderer (cargo features `native-renderer` and `rust-core`, macOS): the game planet-render draws goes in a
+// CALayer under the HUD page (`Under`); the spectacles' layers take their images from `image` too. See NATIVE.md.
 mod under;
 
-pub use source::{FrameSource, PngLoop, TestPattern};
-#[cfg(feature = "rust-core")]
 pub use under::Under;
 
-use objc2::{msg_send, rc::Retained, runtime::AnyObject};
-use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
 };
-use objc2_quartz_core::{kCAFilterNearest, kCAGravityResize, CALayer, CATransaction};
 use std::{
     ffi::c_void,
     ptr::NonNull,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
-use tauri::{AppHandle, Manager};
-
-
-// Core Animation objects that only the main thread touches; the loop thread just carries them there
-struct MainOnly<T>(T);
-unsafe impl<T> Send for MainOnly<T> {}
-unsafe impl<T> Sync for MainOnly<T> {}
-
-/// the source named by the hidden setting, if any
-pub fn wanted(saved: &serde_json::Value) -> Option<Box<dyn FrameSource>> {
-    match saved.get("native_renderer")?.as_str()? {
-        "planet" => Some(Box::new(PngLoop::planet())),
-        "pattern" => Some(Box::new(TestPattern::new())),
-        _ => None,
-    }
-}
-
-/// takes over the main window; call on the main thread (tauri's setup). `fps` is the frame-rate setting
-pub fn start(app: &AppHandle, mut src: Box<dyn FrameSource>, fps: fn(&AppHandle) -> f64) -> tauri::Result<()> {
-    let win = app.get_webview_window("main").expect("main window");
-    let _ = win.navigate("about:blank".parse().unwrap()); // the game page stops: nothing runs behind the layer
-    win.with_webview(|w| unsafe {
-        let view = w.inner() as *mut AnyObject;
-        let _: () = msg_send![view, setHidden: true];
-    })?;
-    let ns_window = win.ns_window()? as *mut AnyObject;
-    let (layer, view) = unsafe {
-        let view: Retained<AnyObject> = msg_send![ns_window, contentView];
-        let _: () = msg_send![&*view, setWantsLayer: true];
-        let root: Retained<CALayer> = msg_send![&*view, layer];
-        let layer = CALayer::new();
-        layer.setContentsGravity(kCAGravityResize);
-        layer.setMagnificationFilter(kCAFilterNearest);
-        layer.setMinificationFilter(kCAFilterNearest);
-        layer.setOpaque(false);
-        root.addSublayer(&layer);
-        (layer, view)
-    };
-
-    let stats = std::env::var_os("IDLE_FIGHTERZ_NATIVE_STATS").map(|_| Arc::new(Stats::default()));
-    let slot: Arc<Mutex<Option<MainOnly<CFRetained<CGImage>>>>> = Arc::default();
-    let shared = MainOnly((layer, view, ns_window));
-    let app = app.clone();
-    std::thread::spawn(move || {
-        let shared = Arc::new(shared);
-        let space = CGColorSpace::new_device_rgb().expect("device RGB");
-        let (w, h) = src.size();
-        let mut last: Vec<u8> = Vec::new();
-        let mut next = Instant::now();
-        let mut reported = Instant::now();
-        loop {
-            // hidden, the window shows nothing: stand still until it shows
-            if !app.state::<crate::Shown>().get() {
-                app.state::<crate::Shown>().wait();
-                next = Instant::now();
-            }
-            let tick = Duration::from_secs_f64(1.0 / fps(&app));
-            next += tick;
-            let now = Instant::now();
-            if next > now {
-                std::thread::sleep(next - now);
-            } else {
-                next = now; // fell behind: don't try to catch up
-            }
-            let t0 = Instant::now();
-            src.step(tick.as_secs_f32());
-            let frame = src.frame();
-            let changed = frame != last.as_slice();
-            if changed {
-                last.clear();
-                last.extend_from_slice(frame);
-                let img = MainOnly(image(&space, w, h, frame));
-                // one present in flight at most: a later frame replaces the waiting one
-                if slot.lock().unwrap().replace(img).is_none() {
-                    let (slot, shared, stats) = (slot.clone(), shared.clone(), stats.clone());
-                    let _ = app.run_on_main_thread(move || {
-                        let t = Instant::now();
-                        if let Some(img) = slot.lock().unwrap().take() {
-                            let (layer, view, ns_window) = &shared.0;
-                            present(layer, view, *ns_window, &img.0, w, h);
-                        }
-                        if let Some(s) = stats {
-                            s.add(&s.present, t.elapsed());
-                        }
-                    });
-                }
-            }
-            if let Some(s) = &stats {
-                s.add(&s.tick, t0.elapsed());
-                if changed {
-                    s.changed.fetch_add(1, Ordering::Relaxed);
-                }
-                if reported.elapsed() >= Duration::from_secs(5) {
-                    reported = Instant::now();
-                    s.report();
-                }
-            }
-        }
-    });
-    Ok(())
-}
 
 // a premultiplied RGBA copy of the frame, owned by the image
 pub(crate) fn image(space: &CGColorSpace, w: u32, h: u32, rgba: &[u8]) -> CFRetained<CGImage> {
@@ -162,22 +49,6 @@ pub(crate) fn image(space: &CGColorSpace, w: u32, h: u32, rgba: &[u8]) -> CFReta
         )
         .expect("image")
     }
-}
-
-// shows the image at the biggest whole-number scale that fits, centred, on the device-pixel grid
-fn present(layer: &CALayer, view: &AnyObject, ns_window: *mut AnyObject, img: &CGImage, w: u32, h: u32) {
-    let (bounds, scale): (CGRect, f64) = unsafe { (msg_send![view, bounds], msg_send![ns_window, backingScaleFactor]) };
-    let k = ((bounds.size.width * scale / w as f64).min(bounds.size.height * scale / h as f64)).floor().max(1.0);
-    let size = CGSize::new(w as f64 * k / scale, h as f64 * k / scale);
-    let snap = |v: f64| (v * scale).round() / scale;
-    let origin = CGPoint::new(snap((bounds.size.width - size.width) / 2.0), snap((bounds.size.height - size.height) / 2.0));
-    // without this, Core Animation cross-fades every new image for a quarter second
-    CATransaction::begin();
-    CATransaction::setDisableActions(true);
-    layer.setContentsScale(scale);
-    layer.setFrame(CGRect::new(origin, size));
-    unsafe { layer.setContents(Some(img.as_ref())) };
-    CATransaction::commit();
 }
 
 // frame-time counters, printed to stderr every 5 s with IDLE_FIGHTERZ_NATIVE_STATS set

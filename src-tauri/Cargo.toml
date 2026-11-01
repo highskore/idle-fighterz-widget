@@ -21,7 +21,7 @@ planet-core = { path = "../game/rust/planet-core", optional = true }
 planet-render = { path = "../game/rust/planet-render", optional = true }
 # local time: the hidden game's quiet hours, snoozes until tomorrow, photo names
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
-# photo mode's PNG; and on macOS the native renderer's stand-in frames
+# photo mode's PNG
 png = "=0.18.1"
 # updates: the release over https (rustls with ring, verified by the platform: no OpenSSL to link on Linux), its
 # minisign signature, sha256s and versions
@@ -39,7 +39,7 @@ block2 = "=0.6.2"
 objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-user-notifications = "=0.3.2"
-# the native renderer (feature native-renderer): a CALayer showing a framebuffer, and the stand-in PNG frames; and the
+# the native renderer (feature native-renderer): the layer under the HUD page; and the
 # spectacles' overlay layers (with rust-core), rendered offscreen in their tests
 objc2-core-foundation = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2", "CGColorSpace", "CGDataProvider", "CGImage", "CGContext", "CGBitmapContext"] }
@@ -53,7 +53,7 @@ libc = { version = "=0.2.191", optional = true }
 # what ships, on every platform (native-renderer compiles to nothing outside macOS). --no-default-features builds
 # 0.1's web-view game
 default = ["rust-core", "native-renderer"]
-# macOS only: with rust-core, the frames in a layer under the HUD page; and the stand-in sources behind a hidden setting
+# macOS only: with rust-core, the frames in a layer under the HUD page; and the spectacles' layers
 native-renderer = ["dep:objc2-core-foundation", "dep:objc2-core-graphics", "dep:objc2-quartz-core", "dep:objc2-io-surface", "dep:libc"]
 # planet-core runs the game natively and planet-render draws it, behind a HUD-only page (see NATIVE.md); without it,
 # game.js runs the game in the web view
