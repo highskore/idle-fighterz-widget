@@ -2,7 +2,6 @@
 // saved as a PNG, twice its size in whole pixels, to the pictures folder and the clipboard. Any key or click carries
 // on; a toast then says where it went. The paused time is played on resume, so a photo costs the run nothing.
 use crate::{planet::Core, Shown};
-use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -10,7 +9,7 @@ use std::{
         Mutex,
     },
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 #[derive(Default)]
 pub struct Photo {
@@ -64,7 +63,7 @@ pub fn enter(app: &AppHandle) {
     }
     core.pause(true);
     *photo.told.lock().unwrap() = None;
-    let _ = app.emit_to("main", "photo", true);
+    crate::to_hud(app, "photo", true.into());
     app.state::<Shown>().poke(); // ghost mode lets go of the clicks, so a click can end it
     if let Some(w) = app.get_webview_window("main") {
         if !app.state::<Shown>().get() {
@@ -86,7 +85,7 @@ pub fn enter(app: &AppHandle) {
         if photo.on.load(Relaxed) {
             *told = Some(text);
         } else {
-            let _ = app.emit_to("main", "notice", Value::String(text));
+            crate::notice(&app, text);
         }
     });
 }
@@ -98,11 +97,11 @@ pub fn exit(app: &AppHandle) {
         return;
     }
     core.pause(false);
-    let _ = app.emit_to("main", "photo", false);
+    crate::to_hud(app, "photo", false.into());
     app.state::<Shown>().poke();
     crate::smoke("photo: off");
     if let Some(text) = told.take() {
-        let _ = app.emit_to("main", "notice", Value::String(text));
+        crate::notice(app, text);
     }
 }
 

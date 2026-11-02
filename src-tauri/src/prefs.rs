@@ -73,13 +73,42 @@ pub fn step(sizes: &[&'static str], cur: &Value, by: i64) -> &'static str {
     sizes[(at + by.signum()).clamp(0, sizes.len() as i64 - 1) as usize]
 }
 
-/// a skin, theme, ki buttons look, mode, planet or UI size this version doesn't know (a newer one's, or a typo) goes back to the default
+/// a skin, theme, ki buttons look, mode, planet or UI size or control centre setting this version doesn't know (a newer
+/// one's, or a typo) goes back to the default
 pub fn known_look(s: &mut Value) {
     let known = [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light"), ("ki_buttons", &KI_BUTTONS[..], "meter"), ("mode", &MODES[..], "floating"), ("mode_prev", &MODES[..2], "floating"), ("planet_size", &PLANET_SIZES[..], "medium"), ("ui_size", &UI_SIZES[..], "medium")];
     for (key, known, fallback) in known {
         if !s[key].as_str().is_some_and(|v| known.contains(&v)) {
             s[key] = json!(fallback);
         }
+    }
+    for (key, fallback) in [("control", json!(false)), ("control_layout", json!(1)), ("control_frame", Value::Null)] {
+        if s.get(key).is_some_and(|v| !control_ok(key, v)) {
+            s[key] = fallback;
+        }
+    }
+}
+
+/// the control centre's layouts (fullscreen with the HUD in a window of its own): 1 the drawer's tabs, 2 a sidebar with
+/// everything, 3 wide with a live planet, 4 a stream deck, 5 mission control
+pub const CONTROL_LAYOUTS: std::ops::RangeInclusive<u64> = 1..=5;
+
+/// a control window's saved frame (`control_frame`): where it was and its size in points, and the layout it had
+pub fn control_frame(v: &Value) -> Option<(f64, f64, f64, f64, u64)> {
+    let n = |k: &str| v.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+    let layout = v.get("layout").and_then(Value::as_u64).filter(|l| CONTROL_LAYOUTS.contains(l))?;
+    let (x, y, w, h) = (n("x")?, n("y")?, n("w")?, n("h")?);
+    let sane = (200.0..=20000.0).contains(&w) && (200.0..=20000.0).contains(&h) && x.abs() <= 1e5 && y.abs() <= 1e5;
+    sane.then_some((x, y, w, h, layout))
+}
+
+// control (on in fullscreen), its layout and the control window's last frame (null before it has one)
+fn control_ok(key: &str, v: &Value) -> bool {
+    match key {
+        "control" => v.is_boolean(),
+        "control_layout" => v.as_u64().is_some_and(|l| CONTROL_LAYOUTS.contains(&l)),
+        "control_frame" => v.is_null() || control_frame(v).is_some(),
+        _ => true,
     }
 }
 
@@ -109,17 +138,17 @@ pub fn vet(update: &mut Value) {
         "mode_prev" => v.as_str().is_some_and(|v| MODES[..2].contains(&v)),
         "planet_size" => v.as_str().is_some_and(|v| PLANET_SIZES.contains(&v)),
         "ui_size" => v.as_str().is_some_and(|v| UI_SIZES.contains(&v)),
-        _ => true,
+        k => control_ok(k, v),
     };
     o.retain(|k, v| ok(k, v));
 }
 
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 28] = [
+pub const PROFILE_KEYS: [&str; 30] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
     "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style", "raid_windows", "screen_beam",
-    "ki_buttons", "planet_size", "ui_size",
+    "ki_buttons", "planet_size", "ui_size", "control", "control_layout",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
@@ -376,5 +405,42 @@ mod tests {
         assert_eq!([s("small", 0), s("huge", 0)], ["medium", "medium"], "0 is medium");
         assert_eq!(s("giant", 1), "large", "one it doesn't know steps from medium");
         assert_eq!(step(&PLANET_SIZES, &json!(null), -3), "small", "one step at a time");
+    }
+
+    #[test]
+    fn an_unknown_control_setting_is_the_default() {
+        let defaults = json!({ "control": false, "control_layout": 1, "control_frame": null });
+        let control = |s: &Value| json!({ "control": s["control"], "control_layout": s["control_layout"], "control_frame": s["control_frame"] });
+        for bad in [json!(0), json!(6), json!(2.5), json!(-1), json!({ "x": 1 }), json!([1, 2])] {
+            let mut s = json!({ "control": bad, "control_layout": bad, "control_frame": bad });
+            known_look(&mut s);
+            assert_eq!(control(&s), defaults, "{bad}");
+        }
+        let mut s = json!({ "control": "yes", "control_layout": "2", "control_frame": "here" });
+        known_look(&mut s);
+        assert_eq!(control(&s), defaults, "strings");
+        for layout in CONTROL_LAYOUTS {
+            let frame = json!({ "x": -1440, "y": 25, "w": 420, "h": 900, "layout": layout });
+            let kept = json!({ "control": true, "control_layout": layout, "control_frame": frame });
+            let mut s = kept.clone();
+            known_look(&mut s);
+            assert_eq!(control(&s), kept, "kept");
+        }
+        for frame in [json!({ "x": 0, "y": 0, "w": 50, "h": 900, "layout": 1 }), json!({ "x": 0, "y": 0, "w": 420, "h": 900, "layout": 9 }), json!({ "x": 1e9, "y": 0, "w": 420, "h": 900, "layout": 1 }), json!({ "x": 0, "y": 0, "w": 420, "h": 900 })] {
+            assert_eq!(control_frame(&frame), None, "{frame}");
+        }
+    }
+
+    #[test]
+    fn an_update_keeps_only_control_settings_there_are() {
+        let mut p = json!({ "control": "on", "control_layout": 7, "control_frame": { "x": 0 }, "size": 300 });
+        vet(&mut p);
+        assert_eq!(p, json!({ "size": 300 }));
+        for layout in CONTROL_LAYOUTS {
+            let ok = json!({ "control": true, "control_layout": layout, "control_frame": null });
+            let mut p = ok.clone();
+            vet(&mut p);
+            assert_eq!(p, ok, "kept");
+        }
     }
 }

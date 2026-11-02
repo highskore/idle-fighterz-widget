@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+#[cfg(feature = "rust-core")]
+mod control;
 mod focus;
 mod place;
 mod popover;
@@ -43,7 +45,7 @@ const DEFAULTS: &str = r#"{
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true, "raid_windows": false, "screen_beam": false,
   "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
-  "ki_buttons": "meter", "shortcut": "Alt+Cmd+KeyP",
+  "ki_buttons": "meter", "shortcut": "Alt+Cmd+KeyP", "control": false, "control_layout": 1, "control_frame": null,
   "settings_style": "compact", "tray_style": "menu", "onboarded": false
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -211,6 +213,10 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     // fullscreen is window mode filling the display: the widget page draws it as window mode, settings shows the pick.
     // Its keys and square corners are the HUD page's, so with game.js in the page there's none, and a saved one is window
     s["fullscreen_ok"] = json!(hud_page());
+    // the control centre: the game's state is the app's, so the HUD can have a window of its own (not on game.js, nor on
+    // Wayland, where no window can be placed or kept above another)
+    s["control_ok"] = json!(control_ok(app));
+    s["control_on"] = json!(control_on(app, &s));
     if s["mode"] == "fullscreen" && !hud_page() {
         s["mode"] = json!("window");
     }
@@ -229,6 +235,51 @@ fn hud_page() -> bool {
 // fullscreen as the window has it: picked, and not on game.js (see with_login)
 fn fullscreen_on(s: &Value) -> bool {
     s["mode"] == "fullscreen" && hud_page()
+}
+
+fn control_ok(app: &AppHandle) -> bool {
+    hud_page() && !app.state::<State>().wayland
+}
+
+// the control centre as the windows have it: picked, fullscreen, and possible here
+fn control_on(app: &AppHandle, s: &Value) -> bool {
+    s["control"] == true && fullscreen_on(s) && control_ok(app)
+}
+
+// an event for the HUD: the game's page and, while it's open, the control centre's
+#[cfg(feature = "rust-core")]
+pub fn to_hud(app: &AppHandle, event: &str, payload: Value) {
+    if app.get_webview_window(control::LABEL).is_some() {
+        let _ = app.emit_to(control::LABEL, event, payload.clone());
+    }
+    let _ = app.emit_to("main", event, payload);
+}
+
+// the app's own news (an update, a photo saved, the away recap) for the game's toasts: the HUD page shows it, or the
+// control centre's when that's where its toasts go
+pub fn notice(app: &AppHandle, text: String) {
+    #[cfg(feature = "rust-core")]
+    to_hud(app, "notice", Value::String(text));
+    #[cfg(not(feature = "rust-core"))]
+    let _ = app.emit_to("main", "notice", text);
+}
+
+// the control centre couldn't open, or went: control goes off, so the HUD is back on the game rather than nowhere
+#[cfg(feature = "rust-core")]
+fn control_lost(app: &AppHandle) {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    if control_on(app, &s) {
+        let _ = set_settings(app.clone(), json!({ "control": false }));
+    }
+}
+
+// settings the app keeps for itself (the control window's frame): saved, with no page told
+#[cfg(feature = "rust-core")]
+fn remember(app: &AppHandle, update: Value) {
+    let state = app.state::<State>();
+    let mut cur = state.settings.lock().unwrap();
+    merge(&mut cur, &update);
+    let _ = save(&state.file, &serde_json::to_vec_pretty(&*cur).unwrap());
 }
 
 fn now_ms() -> f64 {
@@ -343,6 +394,10 @@ fn refit(app: &AppHandle, again: bool) {
     if fullscreen_on(&s) && !app.state::<State>().wayland {
         place::fill_display(app, prefs::size(&s["size"]), again);
     }
+    #[cfg(feature = "rust-core")]
+    if again {
+        control::rehome(app);
+    }
 }
 
 // the global show/hide shortcut, so the widget comes back even when the menu-bar icon is hidden behind the notch.
@@ -418,6 +473,8 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         popover::hide(app);
     }
     show_power(app, s);
+    #[cfg(feature = "rust-core")]
+    control::sync(app, s, app.try_state::<Shown>().is_none_or(|v| v.get()));
 }
 
 // the tray's profiles: rebuilt when their names change, the one the settings match checked
@@ -539,6 +596,11 @@ fn show_widget(app: &AppHandle, show: bool) {
         let _ = w.controller().SetIsVisible(show);
     });
     app.state::<Shown>().set(show);
+    #[cfg(feature = "rust-core")]
+    {
+        let s = app.state::<State>().settings.lock().unwrap().clone();
+        control::sync(app, &s, show); // the control centre goes and comes back with it
+    }
     app.state::<system::Sys>().auto_hidden.store(false, std::sync::atomic::Ordering::Relaxed); // shown or hidden by hand
     // and the page hears it from the app too, wherever document.hidden doesn't follow the window
     let _ = win.emit("shown", show);
@@ -598,6 +660,8 @@ fn restyle_settings(app: &AppHandle, style: &Value) {
 #[tauri::command]
 fn quit(app: AppHandle) {
     let _ = app.save_window_state(StateFlags::POSITION);
+    #[cfg(feature = "rust-core")]
+    control::keep_frame(&app);
     app.exit(0);
 }
 
@@ -849,7 +913,8 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     let app = app.plugin(tauri_plugin_single_instance::init(|app, _, _| show_widget(app, true)));
     let app = app
-        .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(StateFlags::POSITION).build())
+        // the control centre places itself (control.rs)
+        .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(StateFlags::POSITION).with_denylist(&["control"]).build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
@@ -884,6 +949,25 @@ fn main() {
             api.prevent_close();
             show_widget(w.app_handle(), false);
         }
+        // closing the control centre turns it off: the HUD goes back on the game
+        #[cfg(feature = "rust-core")]
+        (tauri::WindowEvent::CloseRequested { api, .. }, control::LABEL) => {
+            api.prevent_close();
+            let app = w.app_handle().clone();
+            std::thread::spawn(move || set_settings(app, json!({ "control": false })));
+        }
+        // gone while the settings still want it (its web view failed): off, as if closed
+        #[cfg(feature = "rust-core")]
+        (tauri::WindowEvent::Destroyed, control::LABEL) => {
+            let app = w.app_handle().clone();
+            std::thread::spawn(move || {
+                if app.state::<Shown>().get() {
+                    control_lost(&app);
+                }
+            });
+        }
+        #[cfg(feature = "rust-core")]
+        (tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_), control::LABEL) => control::moved(w.app_handle()),
         _ => {}
     });
     app.setup(|app| {
@@ -896,6 +980,8 @@ fn main() {
             let _ = main.set_title(&app.package_info().name);
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
             app.manage(system::Sys::default());
+            #[cfg(feature = "rust-core")]
+            app.manage(control::Control::default());
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default(), tray_profiles: Mutex::new(None) });
             app.manage(place::Full::new(fullscreen_on(&settings) && !wayland, prefs::size(&settings["size"])));
             popover::init(app.handle());
@@ -1048,6 +1134,13 @@ fn watch_pointer(app: AppHandle) {
             // in ghost mode the widget takes no clicks, so it doesn't wake to the pointer either, until ⌥ is held
             let ghosted = app.state::<system::Sys>().ghosted.load(std::sync::atomic::Ordering::Relaxed);
             let inside = !ghosted && x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
+            // the pointer over the control centre is about the game too: it keeps its awake frame rate. At x -1, y -1:
+            // nowhere on the game's own window
+            #[cfg(feature = "rust-core")]
+            let (inside, x, y) = match app.get_webview_window(control::LABEL) {
+                Some(cw) if !inside && hovered(&cw, c) => (true, -1.0, -1.0),
+                _ => (inside, x, y),
+            };
             let now = inside.then_some((x.round() as i32, y.round() as i32));
             if now != last {
                 let _ = w.emit("pointer", json!({ "inside": inside, "x": x, "y": y }));
@@ -1055,6 +1148,12 @@ fn watch_pointer(app: AppHandle) {
             }
         }
     });
+}
+
+#[cfg(feature = "rust-core")]
+fn hovered(w: &tauri::WebviewWindow, c: tauri::PhysicalPosition<f64>) -> bool {
+    let (Ok(p), Ok(s)) = (w.outer_position(), w.outer_size()) else { return false };
+    c.x >= p.x as f64 && c.y >= p.y as f64 && c.x < p.x as f64 + s.width as f64 && c.y < p.y as f64 + s.height as f64
 }
 
 fn tray(app: &AppHandle) -> tauri::Result<()> {
@@ -1495,6 +1594,7 @@ mod tests {
             "snooze_until" => "snooze",
             "onboarded" => "intro",
             "mode_prev" => "mode",
+            "control_frame" => "control", // the app's own, kept as the control window is moved
             k => k,
         }
         .to_string();
@@ -1520,7 +1620,7 @@ mod tests {
         commands.extend(list(include_str!("planet.rs"), "$($more,)*"));
         assert!(commands.len() > 50 && commands.contains(&"planet_wear".to_string()), "{commands:?}");
         let built = include_str!("../build.rs");
-        let granted = [include_str!("../capabilities/default.json"), include_str!("../capabilities/settings.json"), include_str!("../capabilities/popover.json")].concat();
+        let granted = [include_str!("../capabilities/default.json"), include_str!("../capabilities/settings.json"), include_str!("../capabilities/popover.json"), include_str!("../capabilities/control.json")].concat();
         for cmd in &commands {
             assert!(built.contains(&format!("\"{cmd}\"")), "{cmd} isn't in build.rs's COMMANDS");
             assert!(granted.contains(&format!("\"allow-{}\"", cmd.replace('_', "-"))), "no capability allows {cmd}");
@@ -1532,7 +1632,7 @@ mod tests {
     fn each_window_may_call_only_its_own_commands() {
         let app = mock_builder().invoke_handler(tauri::generate_handler![]).build(tauri::generate_context!(test = true)).unwrap();
         let open = |label: &str| WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into())).build().unwrap();
-        let (main, settings, popover) = (open("main"), open("settings"), open("popover"));
+        let (main, settings, popover, control) = (open("main"), open("settings"), open("popover"), open("control"));
         let call = |w: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str| {
             let req = InvokeRequest {
                 cmd: cmd.into(),
@@ -1562,6 +1662,21 @@ mod tests {
         }
         for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "fullscreen", "step_size", "planet_start", "planet_buy", "planet_buy_n", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
             assert!(!call(&popover, cmd), "the popover may not call {cmd}");
+        }
+        // the control centre: exactly its list, and nothing that draws, points at or sizes the planet
+        let allowed = [
+            "get_settings", "open_settings", "set_sound", "photo", "photo_exit", "fullscreen", "planet_resend", "planet_key", "planet_train",
+            "planet_kaioken", "planet_buy", "planet_buy_n", "planet_bulk", "planet_shop_info", "planet_learn", "planet_respec", "planet_learn_angel",
+            "planet_auto_next", "planet_wear", "planet_pick_wish", "planet_pick_hero", "planet_menu", "planet_angels", "planet_ascend_info",
+            "planet_god_info", "planet_zeno_info", "planet_card", "planet_itx", "planet_itx_jump", "planet_sprite", "planet_spot", "planet_pixels",
+        ];
+        let every = include_str!("../build.rs").split("= &[").nth(1).unwrap().split("];").next().unwrap().split('"').skip(1).step_by(2).collect::<Vec<_>>();
+        assert!(every.len() > 50 && allowed.iter().all(|c| every.contains(c)), "{every:?}");
+        for cmd in every {
+            assert_eq!(call(&control, cmd), allowed.contains(&cmd), "the control centre {} {cmd}", if allowed.contains(&cmd) { "may call" } else { "may not call" });
+        }
+        for cmd in ["planet_pointer_down", "planet_resize", "planet_view", "planet_mask", "planet_fps", "planet_start", "set_settings", "plugin:window|set_size", "plugin:window|set_position", "plugin:event|emit_to", "plugin:event|emit", "plugin:webview|create_webview_window"] {
+            assert!(!call(&control, cmd), "the control centre may not call {cmd}");
         }
     }
 }

@@ -673,8 +673,7 @@ fn current(app: &AppHandle) -> String {
 fn notice(app: &AppHandle, title: &str, body: &str) {
     #[cfg(feature = "rust-core")]
     if app.state::<crate::Shown>().get() && app.try_state::<crate::planet::Core>().is_some() {
-        use tauri::Emitter;
-        let _ = app.emit_to("main", "notice", if body.is_empty() { title.to_string() } else { format!("{title}. {body}") });
+        crate::notice(app, if body.is_empty() { title.to_string() } else { format!("{title}. {body}") });
         return;
     }
     crate::notify(app.clone(), title.into(), body.into());
