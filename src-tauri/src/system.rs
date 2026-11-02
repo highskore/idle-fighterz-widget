@@ -154,7 +154,8 @@ fn watch_screen(app: AppHandle, wayland: bool) {
         let mut screen = os::Screen::new(wayland);
         let mut was = None;
         loop {
-            let on = setting(&app, |s| s["auto_hide"].as_bool().unwrap_or(false));
+            // fullscreen, the widget is the fullscreen app in front: it would hide itself
+            let on = setting(&app, |s| s["auto_hide"].as_bool().unwrap_or(false) && s["mode"] != "fullscreen");
             let ours = app.state::<Sys>().auto_hidden.load(Relaxed);
             let visible = app.state::<Shown>().get();
             if !ours && !(on && visible) {
@@ -194,7 +195,7 @@ fn watch_alt(app: AppHandle, wayland: bool) {
         let mut through = false;
         loop {
             let ghost = setting(&app, |s| s["ghost"].as_bool().unwrap_or(false));
-            let floating = setting(&app, |s| s["mode"] != "window") && app.state::<State>().transparent;
+            let floating = setting(&app, |s| s["mode"] == "floating") && app.state::<State>().transparent;
             let watch = ghost && floating && app.state::<Shown>().get();
             let alt = if watch { keys.alt() } else { None };
             let want = click_through(ghost, floating, alt.unwrap_or(false));

@@ -179,7 +179,7 @@ fn merge(base: &mut Value, over: &Value) {
 }
 
 // what the pages see: the settings, plus whether login launch is on, the app's name (productName, the one place it's set),
-// the OS (for key labels) and whether the window can be see-through (if not, the mode reads as window)
+// the OS (for key labels) and whether the window can be see-through (if not, floating reads as window)
 fn with_login(app: &AppHandle, mut s: Value) -> Value {
     s["login"] = json!(app.autolaunch().is_enabled().unwrap_or(false));
     s["name"] = json!(app.package_info().name);
@@ -187,7 +187,7 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     let transparent = app.state::<State>().transparent;
     s["transparent"] = json!(transparent);
     s["wayland"] = json!(app.state::<State>().wayland);
-    if !transparent {
+    if !transparent && s["mode"] == "floating" {
         s["mode"] = json!("window");
     }
     // the frame rate the widget draws at, and the one picked in settings
@@ -208,6 +208,11 @@ fn with_login(app: &AppHandle, mut s: Value) -> Value {
     #[cfg(not(feature = "rust-core"))]
     let spectacle = false;
     s["spectacle_ok"] = json!(spectacle);
+    // fullscreen is window mode filling the display: the widget page draws it as window mode, settings shows the pick
+    s["mode_pick"] = s["mode"].clone();
+    if s["mode"] == "fullscreen" {
+        s["mode"] = json!("window");
+    }
     s
 }
 
@@ -314,18 +319,22 @@ fn bind(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
 }
 
 // `resize`: snap to the size preset (on launch, and when the size or mode is picked); otherwise a window-mode window
-// keeps the size it was dragged to
+// keeps the size it was dragged to. Fullscreen fills the display the widget is on, and leaving it goes back to the preset
 fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let Some(win) = app.get_webview_window("main") else { return };
     let on_top = s["on_top"].as_bool().unwrap_or(true);
     let side = prefs::size(&s["size"]);
+    let full = s["mode"] == "fullscreen";
     let _ = win.set_always_on_top(on_top);
-    if resize {
+    if win.is_fullscreen().unwrap_or(false) != full {
+        let _ = win.set_fullscreen(full);
+    }
+    if resize && !full {
         let _ = win.set_size(LogicalSize::new(side, side));
         place::settle(app, false); // a bigger widget near an edge stays on screen
     }
     // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither
-    let windowed = s["mode"] == "window" || !app.state::<State>().transparent;
+    let windowed = s["mode"] != "floating" || !app.state::<State>().transparent;
     let _ = win.set_shadow(windowed);
     let _ = win.set_resizable(windowed);
     let tray = app.state::<State>().tray.lock().unwrap().clone();

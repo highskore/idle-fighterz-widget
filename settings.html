@@ -76,7 +76,7 @@ main::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 3px; }
 <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
 <div class="row" data-s="fps"><span>frame rate</span><div class="seg" data-seg="fps"><button data-v="60">smooth</button><button data-v="30">balanced</button><button data-v="15">battery saver</button></div></div>
 <label class="row" data-s="battery_auto"><span>battery saver when unplugged <small id="battv"></small></span><input type="checkbox" data-k="battery_auto"></label>
-<div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+<div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button><button data-v="fullscreen">fullscreen</button></div></div>
 <label class="row" data-s="ghost"><span>ghost mode <small id="ghostv"></small></span><input type="checkbox" data-k="ghost"></label>
 <label class="row" id="hiderow" data-s="auto_hide"><span>hide for fullscreen apps <small>and slideshows</small></span><input type="checkbox" data-k="auto_hide"></label>
 <div class="row" data-s="clouds"><span>clouds</span><div class="seg" data-seg="clouds"><button data-v="always">always</button><button data-v="hover">on hover</button><button data-v="never">never</button></div></div>
@@ -128,7 +128,7 @@ function render(v) {
   s = v;
   document.querySelectorAll('[data-k]').forEach(i => { i.checked = !!s[i.dataset.k]; });
   document.querySelectorAll('[data-n]').forEach(i => { i.checked = !!s.notify[i.dataset.n]; });
-  document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg === 'fps' ? 'fps_pick' : g.dataset.seg]) === b.dataset.v)));
+  document.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[{ fps: 'fps_pick', mode: 'mode_pick' }[g.dataset.seg] || g.dataset.seg]) === b.dataset.v)));
   $('camt').value = s.cloud_amount; $('cav').textContent = s.cloud_amount;
   $('opacity').value = Math.round(s.opacity * 100); $('opv').textContent = Math.round(s.opacity * 100) + '%';
   $('quiet').checked = !!s.quiet.on; $('from').value = s.quiet.from; $('to').value = s.quiet.to; $('times').setAttribute('aria-disabled', String(!s.quiet.on));

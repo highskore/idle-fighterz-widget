@@ -237,12 +237,16 @@ pub fn watch(app: &AppHandle, file: PathBuf) {
 
 fn floating(app: &AppHandle) -> bool {
     let s = app.state::<State>();
-    s.transparent && s.settings.lock().unwrap()["mode"] != "window"
+    s.transparent && s.settings.lock().unwrap()["mode"] == "floating"
 }
 
 /// After a drag (`dragged`) or a resize: snapped if floating and let go near an edge, kept on screen, remembered.
+/// Fullscreen, the window fills its display: nothing to snap, and its place isn't the widget's
 pub fn settle(app: &AppHandle, dragged: bool) {
     let (Some(w), Some(places)) = (app.get_webview_window("main"), app.try_state::<Places>()) else { return };
+    if w.is_fullscreen().unwrap_or(false) {
+        return;
+    }
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return };
     let Some((mut x, mut y)) = clamp(at, &d.areas) else { return };
     if dragged && floating(app) {
@@ -260,6 +264,9 @@ pub fn settle(app: &AppHandle, dragged: bool) {
 // the displays changed (or this is the first look): the place kept for this arrangement, else on screen where it is
 fn arrive(app: &AppHandle, first: bool) {
     let Some(w) = app.get_webview_window("main") else { return };
+    if w.is_fullscreen().unwrap_or(false) {
+        return;
+    }
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return };
     let kept = recall(&app.state::<Places>().list.lock().unwrap(), &d.key);
     let want = match kept {

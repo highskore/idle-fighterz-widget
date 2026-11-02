@@ -69,6 +69,9 @@ pub fn known_look(s: &mut Value) {
     }
 }
 
+/// the widget's modes: floating over the wallpaper, an opaque window, or that window filling the display
+pub const MODES: [&str; 3] = ["floating", "window", "fullscreen"];
+
 /// the widget layouts there are (4 and 5 were dropped)
 pub const LAYOUTS: [u64; 5] = [7, 1, 2, 3, 6];
 
@@ -80,6 +83,7 @@ pub fn vet(update: &mut Value) {
         "skin" => v.as_str().is_some_and(|v| SKINS.contains(&v)),
         "theme" => v.as_str().is_some_and(|v| THEMES.contains(&v)),
         "ki_buttons" => v.as_str().is_some_and(|v| KI_BUTTONS.contains(&v)),
+        "mode" => v.as_str().is_some_and(|v| MODES.contains(&v)),
         _ => true,
     };
     o.retain(|k, v| ok(k, v));
@@ -270,9 +274,14 @@ mod tests {
     // a profile saved by a newer version (or edited by hand) can't set what this one doesn't have
     #[test]
     fn an_update_keeps_only_layouts_and_looks_there_are() {
-        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "ki_buttons": "gauge", "size": 300 });
+        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "ki_buttons": "gauge", "mode": "kiosk", "size": 300 });
         vet(&mut p);
         assert_eq!(p, json!({ "size": 300 }));
+        for mode in MODES {
+            let mut p = json!({ "mode": mode });
+            vet(&mut p);
+            assert_eq!(p, json!({ "mode": mode }), "kept");
+        }
         for layout in LAYOUTS {
             let mut p = json!({ "layout": layout, "skin": "drawer", "theme": "auto", "ki_buttons": "meter" });
             vet(&mut p);

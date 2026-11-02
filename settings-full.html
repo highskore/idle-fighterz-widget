@@ -165,7 +165,7 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
     <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size" style="width: 260px"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
     <div class="grid2"><div>
       <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
-      <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button></div></div>
+      <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button><button data-v="fullscreen">fullscreen</button></div></div>
       <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
       <div class="row" data-s="theme"><span>theme <small id="themev"></small></span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
       <div class="row" data-s="ki_buttons"><span>ki buttons</span><div class="seg" data-seg="ki_buttons"><button data-v="meter">ki meter</button><button data-v="classic">classic</button></div></div>
@@ -303,7 +303,7 @@ function render(v) {
   s = v; MAC = s.os === 'macos';
   all('[data-k]').forEach(i => { i.checked = !!s[i.dataset.k]; });
   all('[data-n]').forEach(i => { i.checked = !!s.notify[i.dataset.n]; });
-  all('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[g.dataset.seg === 'fps' ? 'fps_pick' : g.dataset.seg]) === b.dataset.v)));
+  all('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(s[{ fps: 'fps_pick', mode: 'mode_pick' }[g.dataset.seg] || g.dataset.seg]) === b.dataset.v)));
   all('[data-sel]').forEach(e => { if (s[e.dataset.sel] !== undefined) e.value = s[e.dataset.sel]; });
   cards();
   $('camt').value = s.cloud_amount; $('cav').textContent = s.cloud_amount;
