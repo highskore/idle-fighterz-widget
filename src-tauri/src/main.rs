@@ -433,6 +433,11 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let side = prefs::size(&s["size"]);
     let full = fullscreen_on(s);
     let _ = win.set_always_on_top(on_top);
+    // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither, nor fullscreen.
+    // Before the frame changes: on Windows the shadow is invisible borders round the frame, measured when it's placed
+    let floating = s["mode"] == "floating" && app.state::<State>().transparent;
+    let _ = win.set_shadow(!floating && !full);
+    let _ = win.set_resizable(!floating && !full);
     // leaving for the mode it came from, at the size it had, it goes back to the frame it had; otherwise to the preset
     let back = if app.state::<State>().wayland {
         if win.is_fullscreen().unwrap_or(false) != full {
@@ -449,10 +454,6 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         let _ = win.set_size(LogicalSize::new(side, side));
         place::settle(app, false); // a bigger widget near an edge stays on screen
     }
-    // window mode is an opaque card: it casts a shadow and can be resized freely; floating, it's neither, nor fullscreen
-    let floating = s["mode"] == "floating" && app.state::<State>().transparent;
-    let _ = win.set_shadow(!floating && !full);
-    let _ = win.set_resizable(!floating && !full);
     let tray = app.state::<State>().tray.lock().unwrap().clone();
     if let Some(t) = tray {
         let _ = t.top.set_checked(on_top);
@@ -1048,6 +1049,19 @@ fn main() {
                     let h = app.clone();
                     let _ = app.run_on_main_thread(move || show_widget(&h, false));
                     smoke("hid the widget");
+                });
+            }
+            // IDLE_FIGHTERZ_SMOKE_FULLSCREEN too (the Windows smoke test): fullscreen 3 s in, and 2 s later whether the window
+            // covers its display exactly
+            if std::env::var_os("IDLE_FIGHTERZ_SMOKE_FULLSCREEN").is_some() {
+                let app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let h = app.clone();
+                    let _ = app.run_on_main_thread(move || drop(set_settings(h, json!({ "mode": "fullscreen" }))));
+                    std::thread::sleep(Duration::from_secs(2));
+                    let h = app.clone();
+                    let _ = app.run_on_main_thread(move || smoke(&place::report(&h)));
                 });
             }
             Ok(())
