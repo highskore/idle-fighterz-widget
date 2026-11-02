@@ -90,7 +90,7 @@ pub fn known_look(s: &mut Value) {
 }
 
 /// the control centre's layouts (fullscreen with the HUD in a window of its own): 1 the drawer's tabs, 2 a sidebar with
-/// everything, 3 wide with a live planet, 4 a stream deck, 5 mission control
+/// everything, 3 wide (power and buttons along the top, tabs under them), 4 a stream deck, 5 mission control
 pub const CONTROL_LAYOUTS: std::ops::RangeInclusive<u64> = 1..=5;
 
 /// a control window's saved frame (`control_frame`): where it was and its size in points, and the layout it had

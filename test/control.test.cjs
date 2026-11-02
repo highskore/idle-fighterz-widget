@@ -55,7 +55,7 @@ test('every layout reaches the power, upgrades, the ki tree and heroes, with par
   }
   for (const l of [1, 3, 4, 5]) assert.ok(C.parts(l).some(p => p.endsWith('ach')), `${l}: achievements`);
   assert.deepEqual(C.LAYOUTS.filter(l => C.parts(l).includes('toast')), C.LAYOUTS.filter(C.toastsOnPanel), 'room for toasts where the panel shows them');
-  assert.ok(C.parts(3).includes('live') && C.LAYOUTS.filter(l => C.parts(l).includes('live')).length === 1, 'only 3 has the live planet (the app feeds only it)');
+  assert.ok(C.LAYOUTS.every(l => !C.parts(l).includes('live')), 'no live planet: the app gives the panel no frames but the share card\'s');
   assert.equal(C.pick(9), 1); assert.equal(C.pick('3'), 3);
 });
 

@@ -1,8 +1,8 @@
 // The control centre (feature rust-core; settings: control, control_layout): in fullscreen the HUD gets a window of its
 // own, control.html, while the game's window keeps the world and what the layout leaves on it. Both pages are hud.html's
 // (scripts/hud.mjs puts this ahead of hud.js in each); the app sends both every planet message, and each page shows
-// only its share of the toasts and cues. Layouts: 1 the drawer's tabs, 2 a sidebar with everything, 3 wide with a live
-// planet, 4 a stream deck, 5 mission control. test/control.test.cjs tests the parts without a page.
+// only its share of the toasts and cues. Layouts: 1 the drawer's tabs, 2 a sidebar with everything, 3 wide (the power
+// and buttons along the top, tabs under them), 4 a stream deck, 5 mission control. test/control.test.cjs tests the parts without a page.
 const CONTROL = (() => {
   const LAYOUTS = [1, 2, 3, 4, 5];
   const pick = n => (LAYOUTS.includes(+n) ? +n : 1);
@@ -35,17 +35,17 @@ const CONTROL = (() => {
 
   // what each layout's panel holds, as build() lays it out: its columns (a width in px, or the rest), each a list of
   // parts: 'hud' the chip and round buttons, 'top' those as a strip, 'tabs:…' parts behind tabs, 'shop' 'tree' 'heroes'
-  // 'ach' a part under its heading, 'live' the planet, 'deck' the tiles, 'toast' room for the panel's toasts; 'more' the
+  // 'ach' a part under its heading, 'deck' the tiles, 'toast' room for the panel's toasts; 'more' the
   // parts behind the deck's last tile. `shop` dresses the upgrades list, `tight` the ki tree in a column
   const PLAN = {
     1: { cols: [{ parts: ['hud', 'tabs:up,tree,heroes,ach'] }], shop: ['desc'] },
     2: { cols: [{ parts: ['top', 'shop', 'tree', 'heroes', 'toast'] }], shop: ['grid2', 'nobulk'], tight: true },
-    3: { cols: [{ w: 280, parts: ['live', 'hud'] }, { parts: ['tabs:up,tree,heroes,ach'] }], shop: ['grid2'] },
+    3: { cols: [{ parts: ['top', 'tabs:up,tree,heroes,ach'] }], shop: ['grid2'] },
     4: { cols: [{ parts: ['top', 'deck'] }], more: ['tree', 'heroes', 'ach'] },
     5: { cols: [{ w: 250, parts: ['hud', 'heroes', 'ach'] }, { w: 260, parts: ['shop'] }, { parts: ['tree'] }], tight: true },
   };
   // the parts build() can place, and the tabs it can show
-  const PARTS = ['hud', 'top', 'shop', 'tree', 'heroes', 'ach', 'live', 'deck', 'toast'], TABS = ['up', 'tree', 'heroes', 'ach'];
+  const PARTS = ['hud', 'top', 'shop', 'tree', 'heroes', 'ach', 'deck', 'toast'], TABS = ['up', 'tree', 'heroes', 'ach'];
   // every part a layout shows (tabs and the deck's sheet opened out), as build() places them
   const parts = layout => { const p = PLAN[pick(layout)]; return [...p.cols.flatMap(c => c.parts), ...(p.more || []).map(k => 'more:' + k)].flatMap(x => (x.startsWith('tabs:') ? x.slice(5).split(',') : [x])); };
   // whether the panel is being used: focused, or the pointer over it lately (hud.js fetches the menus more often then)
@@ -165,10 +165,6 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .ach span { display: none; } #cc .ach.open span { display: inline; }
 #cc .tree-head { grid-column: 1 / -1; margin: 0 2px 2px; font-size: 10px; }
 #cc .tree-head button + button { margin-left: 4px; }
-/* 3: the planet as the game's window shows it, a few frames a second */
-#cc .live { position: relative; flex: none; height: 150px; overflow: hidden; border-radius: 12px; border: 1px solid var(--edge); background: #000; }
-#cc .live canvas { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
-#cc .live em { position: absolute; left: 8px; top: 8px; font-style: normal; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: #fff; background: rgba(224,51,43,.9); padding: 2px 7px; border-radius: 999px; }
 /* 4: the stream deck */
 #cc .deck { flex: 1; min-height: 0; display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, minmax(0, 1fr)); grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 #cc .tile { position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; padding: 10px 11px; overflow: hidden; font: inherit; text-align: left; color: var(--ink); background: var(--row); border: 1px solid var(--line); border-radius: 14px; cursor: pointer; }
@@ -194,7 +190,7 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .bulkt b { font-weight: 400; font-size: 16px; color: var(--gold); }
 #cc .sheet { position: fixed; inset: var(--pad); z-index: 5; display: flex; flex-direction: column; background: var(--cc-bg); box-shadow: 0 12px 40px rgba(0,0,0,.45); }
 #cc .sheet .x { flex: none; width: 34px; font: inherit; font-size: 16px; color: var(--muted); background: none; border: 0; cursor: pointer; }
-/* 4 and 2: the chip as a strip beside the buttons */
+/* 2, 3 and 4: the chip as a strip beside the buttons */
 #cc .top .dw-chip { flex: 1; min-width: 0; flex-direction: row; align-items: center; gap: 14px; }
 #cc .top .dw-chip > i { flex: 0 0 90px; }
 #cc[data-l="2"] .top .dw-chip { flex-direction: column; align-items: stretch; gap: 5px; } #cc[data-l="2"] .top .dw-chip > i { flex: none; }
@@ -232,7 +228,7 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
     const h = (tag, cls, ...kids) => { const e = document.createElement(tag); if (cls) e.className = cls; e.append(...kids.filter(k => typeof k === 'string' || k instanceof Node)); return e; };
     const button = (cls, ...kids) => { const b = h('button', cls, ...kids); b.type = 'button'; return b; };
     const cc = h('div'); cc.id = 'cc';
-    let layout = 0, tab = 'up', sheet = false, menuAt = -1, live = null, angelsOn = false;
+    let layout = 0, tab = 'up', sheet = false, menuAt = -1, angelsOn = false;
     const thumbs = {};
     const thumb = id => thumbs[id] || (thumbs[id] = game.thumb(id));
     // what a click changed comes back with the menus hud.js fetches again: drawn once it's in
@@ -303,24 +299,6 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
       box.append(bar, pane);
       return box;
     }
-    function liveView() {
-      const cv = h('canvas'), box = h('div', 'live', cv, h('em', '', 'live')), buf = h('canvas');
-      let busy = false;
-      const frame = () => {
-        if (busy || document.hidden || !box.isConnected) return; busy = true;
-        Promise.all([api.invoke('planet_spot').then(JSON.parse), api.invoke('planet_pixels')]).then(([s, px]) => {
-          if (!px || px.byteLength !== s.w * s.h * 4) return;   // too soon, the app sends nothing (control.rs)
-          buf.width = s.w; buf.height = s.h; buf.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px), s.w, s.h), 0, 0);
-          // the planet and some sky round it, at the box's shape
-          const k = cv.clientWidth / Math.max(1, cv.clientHeight), side = Math.min(s.h, Math.max(s.r * 3.2, 40)), wd = Math.min(s.w, side * k);
-          cv.width = Math.round(wd); cv.height = Math.round(side);
-          const x = cv.getContext('2d'); x.imageSmoothingEnabled = false;
-          x.drawImage(buf, Math.max(0, Math.min(s.w - wd, s.cx - wd / 2)), Math.max(0, Math.min(s.h - side, s.cy - side / 2)), wd, side, 0, 0, cv.width, cv.height);
-        }).catch(() => {}).finally(() => { busy = false; });
-      };
-      clearInterval(live); live = setInterval(frame, 300); frame();   // the app gives it one every 200 ms at most
-      return box;
-    }
     // the round button's icon (the skin's, once it's there: tick swaps a placeholder for it)
     const icon = k => { const b = document.querySelector(`.w [data-w="${k}"] svg`); if (b) return b.cloneNode(true); const t = document.createElement('template'); t.innerHTML = SVG.more; t.content.firstChild.classList.add('ph'); return t.content.firstChild; };
     function deckView() {
@@ -350,7 +328,6 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
       tree: (c, col, plan) => { const box = h('div', 'card pane'); box.style.minHeight = '150px'; box.append(menuPart('tree', { tight: plan.tight })); c.append(heading('ki tree', 'tree'), box); },
       heroes: c => { const box = h('div', 'card'); box.style.flex = 'none'; box.append(menuPart('heroes', { row: true })); c.append(heading('heroes', 'heroes'), box); },
       ach: c => { const box = h('div', 'card pane'); box.append(menuPart('ach')); c.append(heading('achievements', 'ach'), box); },
-      live: c => c.append(liveView()),
       deck: c => c.append(deckView()),
       toast: c => c.append(h('div', 'toastslot')),   // the panel's toasts show here (#toast is fixed to the foot)
     };
@@ -360,7 +337,6 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
       const s = api.settings() || {};
       layout = pick(s.control_layout); root.dataset.cc = layout; cc.dataset.l = layout;
       const plan = PLAN[layout], keep = [w(), $('shop')];
-      clearInterval(live); live = null;
       cc.textContent = '';
       for (const k of keep) if (k && !k.isConnected) document.body.append(k);   // parked until placed
       for (const col of plan.cols) {
