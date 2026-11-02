@@ -187,7 +187,11 @@ fn open(app: &AppHandle) -> tauri::Result<()> {
         .min_inner_size(min_w, min_h)
         .resizable(true)
         .maximizable(false)
-        .minimizable(false)
+        // Windows: no title bar of its own (the page draws a thin one, control.js); the shadow keeps Windows 11's
+        // rounded corners. macOS keeps its own
+        .decorations(!cfg!(windows))
+        .shadow(true)
+        .minimizable(cfg!(windows))
         .always_on_top(true)
         .visible_on_all_workspaces(true)
         .focused(false) // the keys stay with the game until the panel is clicked
