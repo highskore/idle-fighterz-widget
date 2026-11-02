@@ -201,7 +201,7 @@ impl Paint {
         if let Some(b) = g.inp.beam.as_ref().filter(|b| b.full && b.t0 != self.seen_beam) {
             self.seen_beam = b.t0;
             let (x, y, dx, dy) = (cx + b.x * kx, cy + b.y * ky, b.dx * kx, b.dy * ky);
-            self.moments.push(Moment::Beam { x, y, dx, dy, kame: g.kame(), ff: b.ff, kaio: b.kaio, ape: b.ape });
+            self.moments.push(Moment::Beam { x, y, dx, dy, kame: matches!(g.s.hero, Hero::Goku | Hero::Gohan | Hero::Krillin | Hero::Goten), ff: b.ff, kaio: b.kaio, ape: b.ape });
         }
     }
 }
@@ -752,6 +752,11 @@ pub fn planet_sprite(core: State<'_, Core>, id: Option<String>) -> Result<String
                     Hero::Goku => "goku",
                     Hero::Gohan => "gohan",
                     Hero::Trunks => "trunks",
+                    Hero::Piccolo => "piccolo",
+                    Hero::Krillin => "krillin",
+                    Hero::Goten => "goten",
+                    Hero::Tien => "tien",
+                    Hero::A17 => "a17",
                 });
                 let fi = ALL_FORMS.iter().position(|f| f.0 == g.forms[g.s.form].name).unwrap_or(0);
                 if g.b.fuse_until > g.t {
@@ -1340,8 +1345,9 @@ mod tests {
         const WIN_FREE: (u32, u32) = (640, 420);
         // (hook, canvas, frames, clouds: None for window mode, Some("") for none, Some("c2") for shape c amount 2)
         type Case<'a> = (&'a str, (u32, u32), u32, Option<&'a str>);
-        // no #shenron (a storm on Rust since game PR #35) or #raid (boss intro and mechanics since game #51/#52): game.js is frozen
-        let cases: [Case; 25] = [
+        // no #shenron (a storm on Rust since game PR #35), #raid (boss intro and mechanics since game #51/#52) or #lookout (its view
+        // since game #69): game.js is frozen
+        let cases: [Case; 24] = [
             ("", MEDIUM, 200, Some("")),
             ("", MEDIUM, 200, Some("c2")),
             ("", SMALL, 200, Some("c2")),
@@ -1366,7 +1372,6 @@ mod tests {
             ("#snake", WIN_M, 400, None),
             ("#kame", WIN_FREE, 400, None),
             ("#cooler", WIN_M, 600, None),
-            ("#lookout", WIN_L, 400, None),
         ];
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/frame.cjs");
         let tmp = std::env::temp_dir().join(format!("idle-fighterz-frames-{}", std::process::id()));
