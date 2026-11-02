@@ -1643,7 +1643,7 @@ mod tests {
                 headers: Default::default(),
                 invoke_key: INVOKE_KEY.to_string(),
             };
-            !get_ipc_response(w, req).unwrap_err().to_string().contains("not allowed")
+            get_ipc_response(w, req).map_or_else(|e| !e.to_string().contains("not allowed"), |_| true) // granted: it fails as not found, or (a core plugin's) runs
         };
         for cmd in ["get_settings", "tray_title", "hide_widget", "open_settings", "notify", "page_state", "set_sound", "photo", "photo_exit", "intro_done", "fullscreen", "step_size", "planet_start", "planet_buy", "planet_fps", "planet_itx", "planet_itx_jump", "planet_view", "planet_pixels", "planet_mask", "planet_sprite", "planet_spot", "planet_buy_n", "planet_shop_info", "planet_bulk", "planet_wear"] {
             assert!(call(&main, cmd), "main may call {cmd}");
@@ -1675,8 +1675,12 @@ mod tests {
         for cmd in every {
             assert_eq!(call(&control, cmd), allowed.contains(&cmd), "the control centre {} {cmd}", if allowed.contains(&cmd) { "may call" } else { "may not call" });
         }
-        for cmd in ["planet_pointer_down", "planet_resize", "planet_view", "planet_mask", "planet_fps", "planet_start", "set_settings", "plugin:window|set_size", "plugin:window|set_position", "plugin:event|emit_to", "plugin:event|emit", "plugin:webview|create_webview_window"] {
+        for cmd in ["planet_pointer_down", "planet_resize", "planet_view", "planet_mask", "planet_fps", "planet_start", "set_settings", "plugin:window|set_size", "plugin:window|set_position", "plugin:window|set_always_on_top", "plugin:window|set_decorations", "plugin:window|maximize", "plugin:window|hide", "plugin:window|destroy", "plugin:event|emit_to", "plugin:event|emit", "plugin:webview|create_webview_window"] {
             assert!(!call(&control, cmd), "the control centre may not call {cmd}");
+        }
+        // its own title bar on Windows: drag, resize from the edges, minimise and close (closing turns it off)
+        for cmd in ["plugin:window|start_dragging", "plugin:window|start_resize_dragging", "plugin:window|minimize", "plugin:window|close"] {
+            assert!(call(&control, cmd), "the control centre may call {cmd}");
         }
     }
 }
