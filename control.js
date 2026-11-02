@@ -411,7 +411,7 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
       const icon = d => `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="${d}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
       const min = button('min'), x = button('x');
       min.innerHTML = icon('M2 6h8'); min.setAttribute('aria-label', 'minimise'); min.addEventListener('click', () => win().minimize());
-      x.innerHTML = icon('M2 2l8 8M10 2l-8 8'); x.setAttribute('aria-label', 'close'); x.addEventListener('click', () => win().close());   // closing turns it off
+      x.innerHTML = icon('M2 2l8 8M10 2l-8 8'); x.setAttribute('aria-label', 'close'); x.addEventListener('click', () => win().close());   // which minimises it, as the native close does (control.rs)
       const bar = h('div', 'cc-bar', h('span', '', 'control centre'), min, x);
       bar.setAttribute('data-tauri-drag-region', '');
       document.body.append(bar);
