@@ -182,7 +182,7 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .tile.no em { color: var(--muted); }
 #cc .tile.big { grid-row: span 2; align-items: center; justify-content: center; gap: 8px; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; color: #fff; border: 0; }
 #cc .tile.big svg { width: 34px; height: 34px; }
-#cc .tile.t-kaio { background: linear-gradient(to top, var(--kc, #e0332b) var(--f, 100%), var(--kp, rgba(224,51,43,.35)) var(--f, 100%)); }
+#cc .tile.t-kaio { color: var(--ki, #fff); background: linear-gradient(to top, var(--kc, #e0332b) var(--f, 100%), var(--kp, rgba(224,51,43,.35)) var(--f, 100%)); }
 #cc .tile.t-itx { grid-row: auto; background: linear-gradient(to top, var(--kc, #1f3a57) var(--f, 100%), var(--kp, rgba(31,58,87,.45)) var(--f, 100%)); color: #cfe0f2; font-size: 10px; }
 #cc .tile.t-itx svg { width: 26px; height: 26px; }
 #cc .tile.big:disabled { opacity: .8; }
@@ -412,7 +412,7 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
         const name = CONTROL.label(src.title || src.getAttribute('aria-label'), src.firstChild && src.firstChild.textContent);
         const sp = t.querySelector('span'), left = src.querySelector('small');
         const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) { sp.textContent = text; fit(sp); }
-        if (round) for (const v of ['--f', '--kc', '--kp']) { const x = round.style.getPropertyValue(v) || src.style.getPropertyValue(v); if (x) t.style.setProperty(v, x); else t.style.removeProperty(v); }
+        if (round) for (const v of ['--f', '--kc', '--kp', '--ki']) { const x = round.style.getPropertyValue(v) || src.style.getPropertyValue(v); if (x) t.style.setProperty(v, x); else t.style.removeProperty(v); }
       }
       const bt = cc.querySelector('[data-bulk] b'), on = $('shop').querySelector('.bulk [aria-pressed="true"]');
       if (bt && on) bt.textContent = on.textContent;
