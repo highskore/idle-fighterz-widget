@@ -1,7 +1,7 @@
 // The control centre: fullscreen with the HUD in a window of its own (settings: control, control_layout), on another
 // display or floating above the game on this one. Its page is control.html, the HUD page laid out again (control.js);
 // it plays through the planet_* calls capabilities/control.json grants it, and never draws or touches the planet.
-// Closing it turns it off and the HUD comes back to the game; leaving fullscreen closes it.
+// Its close button minimises it; turning it off in settings, leaving fullscreen or hiding the widget closes it.
 use crate::prefs;
 use serde_json::{json, Value};
 use std::{
@@ -26,27 +26,75 @@ type Frame = (f64, f64, f64, f64);
 pub struct Control {
     layout: AtomicU64,  // the layout the open window was sized for
     making: AtomicBool, // a window is being made (off the calling thread)
+    closing: AtomicBool, // the app is closing it (its close button only minimises it)
+    restore: AtomicBool, // the settings just asked for it again (control on, fullscreen): a minimised one comes back
     card: Mutex<Option<Instant>>,  // the share card asked for its frame
     moved: Mutex<Option<Instant>>, // the last move or resize, saved once it settles
     away: Mutex<Option<Frame>>,    // where it was on a display that went away, to go back to
 }
 
-/// what the window needs: `want` it (control on, fullscreen, the widget showing), whether one is open or being made,
-/// and whether its layout changed
+/// what the window needs: `want` it (control on, fullscreen, the widget showing), whether one is open (a window
+/// that's gone but still listed isn't) or being made, whether its layout changed, and `back`: the settings asked for
+/// it again while it's minimised
 #[derive(Debug, PartialEq)]
 pub enum Step {
     Open,
     Close,
     Resize,
+    Restore,
     Stay,
 }
 
-pub fn step(want: bool, open: bool, making: bool, relayout: bool) -> Step {
+pub fn step(want: bool, open: bool, making: bool, relayout: bool, back: bool) -> Step {
     match (want, open) {
         (true, false) if !making => Step::Open,
         (false, true) => Step::Close,
+        (true, true) if back => Step::Restore,
         (true, true) if relayout => Step::Resize,
         _ => Step::Stay,
+    }
+}
+
+/// The settings (an update with control on, or fullscreen) or the widget coming back ask for the window again: a
+/// minimised one is restored at the next sync
+pub fn ask(app: &AppHandle) {
+    if let Some(c) = app.try_state::<Control>() {
+        c.restore.store(true, Relaxed);
+    }
+}
+
+/// The window's close button: it minimises the panel, unless the app is closing it (then true: let it close)
+pub fn close_requested(app: &AppHandle) -> bool {
+    let closing = app.try_state::<Control>().is_some_and(|c| c.closing.swap(false, Relaxed));
+    if !closing {
+        if let Some(w) = app.get_webview_window(LABEL) {
+            let _ = w.minimize();
+        }
+    }
+    closing
+}
+
+/// The window is gone: an app close is over
+pub fn destroyed(app: &AppHandle) {
+    if let Some(c) = app.try_state::<Control>() {
+        c.closing.store(false, Relaxed);
+    }
+}
+
+// a window still listed after it went (its close not through yet) answers nothing: not open
+fn alive<R: Runtime>(w: &WebviewWindow<R>) -> bool {
+    w.is_visible().is_ok()
+}
+
+fn hidden<R: Runtime>(w: &WebviewWindow<R>) -> bool {
+    w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true)
+}
+
+// clears `making` however the making ends (an error, or a panic in it)
+struct Making<'a>(&'a AtomicBool);
+impl Drop for Making<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Relaxed);
     }
 }
 
@@ -55,12 +103,26 @@ pub fn sync(app: &AppHandle, s: &Value, shown: bool) {
     let Some(c) = app.try_state::<Control>() else { return };
     let want = crate::control_on(app, s) && shown;
     let layout = s["control_layout"].as_u64().unwrap_or(1);
-    let w = app.get_webview_window(LABEL);
-    match step(want, w.is_some(), c.making.load(Relaxed), c.layout.load(Relaxed) != layout) {
+    let w = app.get_webview_window(LABEL).filter(alive);
+    let back = c.restore.swap(false, Relaxed) && w.as_ref().is_some_and(hidden);
+    match step(want, w.is_some(), c.making.load(Relaxed), c.layout.load(Relaxed) != layout, back) {
+        // closed the usual way, so it's let go and its label is free again; destroyed if that's refused
         Step::Close => {
             keep_frame(app);
             if let Some(w) = w {
-                let _ = w.destroy();
+                c.closing.store(true, Relaxed);
+                if w.close().is_err() {
+                    let _ = w.destroy();
+                }
+            }
+        }
+        Step::Restore => {
+            if let Some(w) = w {
+                let _ = w.unminimize();
+                let _ = w.show();
+                if c.layout.swap(layout, Relaxed) != layout {
+                    resize(&w, layout);
+                }
             }
         }
         Step::Resize => {
@@ -74,8 +136,10 @@ pub fn sync(app: &AppHandle, s: &Value, shown: bool) {
         Step::Open if !c.making.swap(true, Relaxed) => {
             let app = app.clone();
             std::thread::spawn(move || {
-                let made = open(&app);
-                app.state::<Control>().making.store(false, Relaxed);
+                let made = {
+                    let _making = Making(&app.state::<Control>().making);
+                    open(&app)
+                };
                 if let Err(e) = made {
                     eprintln!("control centre: no window ({e})");
                     crate::control_lost(&app);
@@ -167,7 +231,27 @@ fn open(app: &AppHandle) -> tauri::Result<()> {
     let scales: Vec<_> = monitors.iter().map(|m| m.scale_factor()).collect();
     let (min_w, min_h) = control_min(layout);
     let (w, h) = control_size(layout);
-    let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("control.html".into()))
+    // the last one may still be on its way out, its label taken for a moment: tried again for up to 2 s
+    let mut tries = 0;
+    let w = loop {
+        match make(app, (w, h), (min_w, min_h)) {
+            Err(e) if tries < 10 && e.to_string().contains("already exists") => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            made => break made?,
+        }
+    };
+    app.state::<Control>().layout.store(layout, Relaxed);
+    if let Some(to) = place(prefs::control_frame(&s["control_frame"]), layout, &areas, &scales, gi) {
+        set_frame(&w, to);
+    }
+    above(&w);
+    w.show()
+}
+
+fn make(app: &AppHandle, (w, h): (f64, f64), (min_w, min_h): (f64, f64)) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("control.html".into()))
         .title(format!("{} — control centre", app.package_info().name))
         .inner_size(w, h)
         .min_inner_size(min_w, min_h)
@@ -177,18 +261,12 @@ fn open(app: &AppHandle) -> tauri::Result<()> {
         // rounded corners. macOS keeps its own
         .decorations(!cfg!(windows))
         .shadow(true)
-        .minimizable(cfg!(windows))
+        .minimizable(true) // its close button minimises it
         .always_on_top(true)
         .visible_on_all_workspaces(true)
         .focused(false) // the keys stay with the game until the panel is clicked
         .visible(false)
-        .build()?;
-    app.state::<Control>().layout.store(layout, Relaxed);
-    if let Some(to) = place(prefs::control_frame(&s["control_frame"]), layout, &areas, &scales, gi) {
-        set_frame(&w, to);
-    }
-    above(&w);
-    w.show()
+        .build()
 }
 
 // above the game: the game's window is on top too, and a click on it would bring it in front of the panel
@@ -313,14 +391,35 @@ mod tests {
     // the window follows the settings, and one still being made when they stop wanting it is closed once it's there
     #[test]
     fn the_window_follows_the_settings() {
-        assert_eq!(step(true, false, false, false), Step::Open);
-        assert_eq!(step(true, false, true, false), Step::Stay, "already being made");
-        assert_eq!(step(false, true, false, false), Step::Close);
-        assert_eq!(step(false, false, true, false), Step::Stay, "being made: matched again once it's there");
-        assert_eq!(step(false, true, false, true), Step::Close, "made after the settings turned it off");
-        assert_eq!(step(true, true, false, true), Step::Resize);
-        assert_eq!(step(true, true, false, false), Step::Stay);
-        assert_eq!(step(false, false, false, false), Step::Stay);
+        assert_eq!(step(true, false, false, false, false), Step::Open);
+        assert_eq!(step(true, false, true, false, false), Step::Stay, "already being made");
+        assert_eq!(step(false, true, false, false, false), Step::Close);
+        assert_eq!(step(false, false, true, false, false), Step::Stay, "being made: matched again once it's there");
+        assert_eq!(step(false, true, false, true, false), Step::Close, "made after the settings turned it off");
+        assert_eq!(step(true, true, false, true, false), Step::Resize);
+        assert_eq!(step(true, true, false, false, false), Step::Stay);
+        assert_eq!(step(false, false, false, false, false), Step::Stay);
+        assert_eq!(step(true, true, false, false, true), Step::Restore);
+        assert_eq!(step(true, true, false, true, true), Step::Restore, "restored, and resized with it");
+        assert_eq!(step(false, true, false, false, true), Step::Close, "off: closed, minimised or not");
+    }
+
+    // the boss's lifecycle, as sync sees it: open, its close button (minimised), off in settings, on again. The window
+    // closed for good must not count as open: it would never be made again ("forever")
+    #[test]
+    fn closed_then_turned_on_again_comes_back() {
+        // open, then the close button: still open, minimised. A later settings change leaves it be
+        assert_eq!(step(true, false, false, false, false), Step::Open);
+        assert_eq!(step(true, true, false, false, false), Step::Stay, "minimised: an unrelated change leaves it there");
+        // control on again (or fullscreen again) while it's minimised: back
+        assert_eq!(step(true, true, false, false, true), Step::Restore);
+        // off in settings: closed; it may stay listed a moment, and a listed window that's gone isn't open
+        assert_eq!(step(false, true, false, false, false), Step::Close);
+        assert_eq!(step(true, false, false, false, false), Step::Open, "on again: made again");
+        // a making that failed or panicked has cleared `making` (Making's drop): the next sync makes it
+        let flag = AtomicBool::new(true);
+        drop(Making(&flag));
+        assert_eq!(step(true, false, flag.load(Relaxed), false, false), Step::Open);
     }
 
     #[test]
@@ -349,3 +448,5 @@ mod tests {
         assert_eq!((big.2, big.3), (1512.0, 920.0), "never bigger than the display");
     }
 }
+
+

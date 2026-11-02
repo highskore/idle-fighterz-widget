@@ -337,6 +337,11 @@ fn set_settings(app: AppHandle, settings: Value) -> Result<(), String> {
         let auto = app.autolaunch();
         let _ = if on { auto.enable() } else { auto.disable() };
     }
+    // control turned on, or fullscreen picked: the control centre comes back if it was minimised
+    #[cfg(feature = "rust-core")]
+    if settings.get("control") == Some(&json!(true)) || settings.get("mode") == Some(&json!("fullscreen")) {
+        control::ask(&app);
+    }
     apply(&app, &s, settings.get("size").is_some() || settings.get("mode").is_some());
     if settings.get("snooze_until").is_some() {
         if let Some(nudge) = app.try_state::<SnoozeNudge>() {
@@ -599,6 +604,9 @@ fn show_widget(app: &AppHandle, show: bool) {
     #[cfg(feature = "rust-core")]
     {
         let s = app.state::<State>().settings.lock().unwrap().clone();
+        if show {
+            control::ask(app);
+        }
         control::sync(app, &s, show); // the control centre goes and comes back with it
     }
     app.state::<system::Sys>().auto_hidden.store(false, std::sync::atomic::Ordering::Relaxed); // shown or hidden by hand
@@ -949,16 +957,17 @@ fn main() {
             api.prevent_close();
             show_widget(w.app_handle(), false);
         }
-        // closing the control centre turns it off: the HUD goes back on the game
+        // the control centre's close button minimises it; the app closes it (off in settings, leaving fullscreen)
         #[cfg(feature = "rust-core")]
         (tauri::WindowEvent::CloseRequested { api, .. }, control::LABEL) => {
-            api.prevent_close();
-            let app = w.app_handle().clone();
-            std::thread::spawn(move || set_settings(app, json!({ "control": false })));
+            if !control::close_requested(w.app_handle()) {
+                api.prevent_close();
+            }
         }
         // gone while the settings still want it (its web view failed): off, as if closed
         #[cfg(feature = "rust-core")]
         (tauri::WindowEvent::Destroyed, control::LABEL) => {
+            control::destroyed(w.app_handle());
             let app = w.app_handle().clone();
             std::thread::spawn(move || {
                 if app.state::<Shown>().get() {
@@ -1152,6 +1161,10 @@ fn watch_pointer(app: AppHandle) {
 
 #[cfg(feature = "rust-core")]
 fn hovered(w: &tauri::WebviewWindow, c: tauri::PhysicalPosition<f64>) -> bool {
+    // minimised (its close button) or hidden, it's not where the pointer is
+    if w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(false) {
+        return false;
+    }
     let (Ok(p), Ok(s)) = (w.outer_position(), w.outer_size()) else { return false };
     c.x >= p.x as f64 && c.y >= p.y as f64 && c.x < p.x as f64 + s.width as f64 && c.y < p.y as f64 + s.height as f64
 }
