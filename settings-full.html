@@ -86,6 +86,8 @@ h2 { margin: 12px 0 6px; }
 .row small { color: var(--muted); }
 .row b { font-weight: inherit; }
 .row[hidden], .miss { display: none !important; }
+.row { flex-wrap: wrap; row-gap: 4px; }   /* too narrow for its label and choices: the choices go under it, right */
+.row > .seg, .row > .size { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 18px; align-items: start; }
 .seg { display: flex; gap: 2px; padding: 2px; background: var(--seg); border-radius: 8px; flex: none; }
 .seg button:disabled { opacity: .4; cursor: default; }
@@ -163,13 +165,13 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
     <h2>layout <small id="layoutv" style="text-transform:none;letter-spacing:0"></small></h2>
     <div class="cards" data-s="layout" id="cards"></div>
     <div class="row" data-s="size"><span>size <small id="szv"></small></span><div class="size"><input type="range" min="300" max="720" step="2" id="size" list="snaps" aria-label="size" style="width: 260px"><div class="seg" id="snapseg"><button data-v="300">s</button><button data-v="400">m</button><button data-v="560">l</button></div></div></div>
+    <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button><button data-v="fullscreen">fullscreen</button></div></div>
+    <label class="row" data-s="control" id="ccrow"><span>control centre <small>fullscreen: the hud in its own window</small></span><input type="checkbox" data-k="control"></label>
+    <div class="row" data-s="control_layout" id="cclrow"><span>control layout <small id="cclv"></small></span><div class="seg" data-seg="control_layout"><button data-v="1" title="drawer: tabs in a tall window">1</button><button data-v="2" title="sidebar: everything at once">2</button><button data-v="3" title="wide: a live planet beside tabs">3</button><button data-v="4" title="stream deck: big buttons">4</button><button data-v="5" title="mission control: three columns">5</button></div></div>
+    <div class="row" data-s="planet_size"><span>planet size <small>window and fullscreen</small></span><div class="seg" data-seg="planet_size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button><button data-v="huge">huge</button></div></div>
+    <div class="row" data-s="ui_size"><span>ui size <small>window and fullscreen</small></span><div class="seg" data-seg="ui_size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button><button data-v="huge">huge</button></div></div>
     <div class="grid2"><div>
       <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
-      <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button><button data-v="fullscreen">fullscreen</button></div></div>
-      <label class="row" data-s="control" id="ccrow"><span>control centre <small>fullscreen: the hud in its own window</small></span><input type="checkbox" data-k="control"></label>
-      <div class="row" data-s="control_layout" id="cclrow"><span>control layout <small id="cclv"></small></span><div class="seg" data-seg="control_layout"><button data-v="1" title="drawer: tabs in a tall window">1</button><button data-v="2" title="sidebar: everything at once">2</button><button data-v="3" title="wide: a live planet beside tabs">3</button><button data-v="4" title="stream deck: big buttons">4</button><button data-v="5" title="mission control: three columns">5</button></div></div>
-      <div class="row" data-s="planet_size"><span>planet size <small>window and fullscreen</small></span><div class="seg" data-seg="planet_size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button><button data-v="huge">huge</button></div></div>
-      <div class="row" data-s="ui_size"><span>ui size <small>window and fullscreen</small></span><div class="seg" data-seg="ui_size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button><button data-v="huge">huge</button></div></div>
       <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
       <div class="row" data-s="theme"><span>theme <small id="themev"></small></span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
       <div class="row" data-s="ki_buttons"><span>ki buttons</span><div class="seg" data-seg="ki_buttons"><button data-v="meter">ki meter</button><button data-v="classic">classic</button></div></div>
