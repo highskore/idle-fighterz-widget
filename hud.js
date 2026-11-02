@@ -130,12 +130,9 @@ GAMES.push({
     // fullscreen mode (settings): Esc leaves it for the mode it came from once no panel is open (the page's own Esc closes
     // the upgrades, the menu, a box or the drawer first), and F11 toggles it (⌃⌘F on macOS, where F11 shows the desktop).
     // The window fills its display then: square corners, and no dragging it. ⌘/ctrl +, − and 0 step the UI size and ⌥/alt
-    // the planet size (hud-keys.js), kept in the settings. Wider than 760px the page would give toasts
-    // the site's bare italic, unreadable on a dark world: they keep the widget's pill, sized for the display
+    // the planet size (hud-keys.js), kept in the settings. A toast keeps to the bottom (a buff line mustn't give it a top too)
     const fullCss = document.createElement('style');
-    fullCss.textContent = `html.full.widget.windowed #game { border: 0; border-radius: 0; }
-      html.full.widget .toast { max-width: min(calc(100% - 32px), 40em); padding: .3em .9em .35em; font-size: clamp(15px, 1.9vmin, 24px); -webkit-text-stroke: 0; border-width: 1px; border-style: solid; border-radius: 999px; }
-      html.full.widget:not([data-theme="dark"]) .toast { background: #fff; border-color: var(--line); box-shadow: 0 1px 0 rgba(0,0,0,.06); }`;
+    fullCss.textContent = 'html.full.widget.windowed #game { border: 0; border-radius: 0; } html.full.widget #toast { top: auto; }';
     document.head.append(fullCss);
     let full = false, mac = false;
     const pickMode = s => { full = s.mode_pick === 'fullscreen'; root.classList.toggle('full', full); };
