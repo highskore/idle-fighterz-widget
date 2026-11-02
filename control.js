@@ -165,7 +165,8 @@ html.control:not([data-cc="3"]) #cc .w [data-w="share"] { display: none !importa
 #cc .tile:disabled { cursor: default; }
 #cc .tile.can { background: var(--can); border-color: var(--gold); box-shadow: 0 0 12px rgba(242,181,58,.15); }
 #cc .tile.no { opacity: .5; }
-#cc .tile b { font-weight: 400; font-size: 12px; line-height: 1.2; }
+#cc .tile b { display: block; font-weight: 400; font-size: 12px; line-height: 1.2; }
+#cc .tile.big span { display: block; max-width: 100%; text-align: center; }
 #cc .tile i { font-style: normal; color: var(--gold); font-size: 10px; }
 #cc .tile em { font-style: normal; font-size: 19px; font-family: var(--serif); color: var(--gold); letter-spacing: -.01em; white-space: nowrap; }
 #cc .tile.no em { color: var(--muted); }
@@ -368,6 +369,9 @@ html.control.photo #cc { visibility: hidden; }
     }
 
     // ── kept up to date: the badges, the menus when they change, the deck's tiles, the sound button
+    // a name too long for its tile gets smaller, whole words kept, rather than clipped or broken
+    const fit = e => { e.style.fontSize = ''; for (let px = parseFloat(getComputedStyle(e).fontSize); e.scrollWidth > e.clientWidth && px > 7; ) e.style.fontSize = (px -= .5) + 'px'; };
+    addEventListener('resize', () => cc.querySelectorAll('.tile b, .tile.big span').forEach(fit));
     const shopKeys = () => [...$('shop').querySelectorAll('[data-buy]')].map(b => b.dataset.buy).join();
     let deckKeys = '';
     function tick() {
@@ -387,7 +391,7 @@ html.control.photo #cc { visibility: hidden; }
         const r = $('shop').querySelector(`[data-buy="${t.dataset.key}"]`); if (!r) continue;
         const name = r.querySelector('b').firstChild.textContent.trim(), lv = (r.querySelector('[data-lv]') || {}).textContent || '', cost = (r.querySelector('[data-cost]') || {}).textContent || '';
         const q = s => t.querySelector(s);
-        if (q('b').textContent !== name) q('b').textContent = name;
+        if (q('b').textContent !== name) { q('b').textContent = name; fit(q('b')); }
         if (q('i').textContent !== lv) q('i').textContent = lv;
         if (q('em').textContent !== cost) q('em').textContent = cost;
         t.classList.toggle('can', !r.disabled); t.classList.toggle('no', r.disabled); t.hidden = r.hidden;
@@ -398,7 +402,7 @@ html.control.photo #cc { visibility: hidden; }
         const ph = t.querySelector('svg.ph'); if (ph && round) ph.outerHTML = round.querySelector('svg').outerHTML;   // the skin's icons came in after the deck
         const name = CONTROL.label(src.title || src.getAttribute('aria-label'), src.firstChild && src.firstChild.textContent);
         const sp = t.querySelector('span'), left = src.querySelector('small');
-        const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) sp.textContent = text;
+        const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) { sp.textContent = text; fit(sp); }
         if (round) for (const v of ['--f', '--kc', '--kp']) { const x = round.style.getPropertyValue(v) || src.style.getPropertyValue(v); if (x) t.style.setProperty(v, x); else t.style.removeProperty(v); }
       }
       const bt = cc.querySelector('[data-bulk] b'), on = $('shop').querySelector('.bulk [aria-pressed="true"]');
