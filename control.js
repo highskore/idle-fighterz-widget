@@ -122,6 +122,7 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .pane { flex: 1 1 0; min-height: 0; overflow: hidden auto; scrollbar-width: thin; }
 /* the page's own upgrades list */
 #cc #shop { position: static; inset: auto; transform: none; width: auto; min-width: 0; max-height: none; display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: flex-start; align-content: start; gap: 3px; padding: 6px; margin: 0; overflow: visible; pointer-events: auto; background: none; border: 0; border-radius: 0; box-shadow: none; visibility: visible; opacity: 1; }
+#cc #shop .rows { display: contents !important; }   /* the whole list, in the panel's own scrolling pane */
 #cc #shop .bulk { display: flex; justify-content: flex-start; gap: 4px; padding: 0 0 4px; }
 #cc #shop .bulk button[data-n] { width: auto; min-width: 0; padding: 2px 12px; border: 0; border-radius: 999px; font-size: 10px; flex: none; display: inline-block; background: var(--row); }
 #cc #shop .bulk button[aria-pressed="true"] { background: var(--can); box-shadow: inset 0 0 0 1px var(--gold); }
@@ -136,8 +137,8 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc #shop.desc button span { display: block; flex-basis: 100%; font-size: 10px; color: var(--muted); }
 #cc #shop.grid2 { display: grid; grid-template-columns: 1fr 1fr; }
 #cc #shop.grid2 .bulk, #cc #shop.grid2 .goal { grid-column: 1 / -1; }
-#cc #shop.grid2 button[data-buy] { flex-direction: column; align-items: start; flex-wrap: nowrap; }
-#cc #shop.grid2 b { width: 100%; flex: none; }
+#cc #shop.grid2 button[data-buy] { flex-wrap: wrap; }
+#cc #shop.grid2 b { flex: 1 0 100%; }
 #cc #shop.nobulk .bulk { display: none; }
 #cc .tip { display: none !important; }
 /* the ki tree, heroes and achievements: drawn here from the game's menus, dressed as the drawer dresses them */
@@ -154,9 +155,10 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .menu-body.chars { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 #cc .char { padding: 8px 4px 6px; border-radius: 12px; } #cc .char.on { border-color: var(--gold); background: var(--can); }
 #cc .char canvas { width: 52px; image-rendering: pixelated; }
-#cc .carousel { display: flex; gap: 6px; padding: 6px; overflow: auto hidden; }
-#cc .carousel .char { flex: 1 0 0; min-width: 0; padding: 6px 2px 4px; gap: 3px; font-size: 10px; }
-#cc .carousel .char span { display: none; } #cc .carousel .char canvas { width: 34px; }
+#cc .carousel { display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); gap: 4px; padding: 6px; }   /* a row while they fit, more rows as heroes come */
+#cc .carousel .char { min-width: 0; padding: 5px 1px 4px; gap: 3px; font-size: 8px; }
+#cc .carousel .char b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#cc .carousel .char span { display: none; } #cc .carousel .char canvas { width: 28px; }
 #cc [data-icons="pills"] { display: flex; flex-wrap: wrap; gap: 4px; }
 #cc .ach { color: var(--muted); background: var(--row); border-color: var(--line); padding: 4px 10px; font-size: 10px; }
 #cc .ach.done { color: var(--ink); background: var(--can); border-color: var(--gold); }
@@ -325,8 +327,9 @@ html.control.photo #cc { visibility: hidden; }
     const PART = {
       hud: c => { if (w()) c.append(w()); },
       top: c => { const r = h('div', 'row top'); if (w()) r.append(w()); if (layout === 4) r.append(bulkTile()); c.append(r); },
-      shop: (c, col, plan) => { const box = h('div', col.parts.length === 1 ? 'card pane' : 'card'); if (col.parts.length > 1) box.style.flex = 'none'; box.append(shop(plan.shop || [])); c.append(heading('upgrades', 'up'), box); },
-      tree: (c, col, plan) => { const box = h('div', 'card pane'); box.append(menuPart('tree', { tight: plan.tight })); c.append(heading('ki tree', 'tree'), box); },
+      shop: (c, col, plan) => { const box = h('div', 'card pane'); if (col.parts.length > 1) box.style.flex = '0 1 auto';   // shares the column: scrolls before the tree goes
+        box.append(shop(plan.shop || [])); c.append(heading('upgrades', 'up'), box); },
+      tree: (c, col, plan) => { const box = h('div', 'card pane'); box.style.minHeight = '150px'; box.append(menuPart('tree', { tight: plan.tight })); c.append(heading('ki tree', 'tree'), box); },
       heroes: c => { const box = h('div', 'card'); box.style.flex = 'none'; box.append(menuPart('heroes', { row: true })); c.append(heading('heroes', 'heroes'), box); },
       ach: c => { const box = h('div', 'card pane'); box.append(menuPart('ach')); c.append(heading('achievements', 'ach'), box); },
       live: c => c.append(liveView()),
