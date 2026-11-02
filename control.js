@@ -65,6 +65,7 @@ const CONTROL = (() => {
 html.cc .w > :not(.dw-chip):not(.w-dock), html.cc .dw, html.cc #shop { display: none !important; }
 html.cc:not([data-cc="1"]):not([data-cc="4"]) .w .dw-chip, html.cc:not([data-cc="5"]) .w .w-dock { display: none !important; }
 html.cc.dw-open .stage { transform: none !important; }
+html.cc .toast { top: auto !important; }   /* a buff line (.fxs) would give it a top too, and stretch it down to its bottom */
 html.cc[data-cc="1"] .w .dw-chip { left: 18px; top: 18px; transform: scale(1.35); transform-origin: 0 0; }
 html.cc[data-cc="4"] .w .dw-chip { left: 50%; top: auto; bottom: 22px; align-items: center; padding: 10px 22px 12px; transform: translateX(-50%) scale(1.6); transform-origin: 50% 100%; }
 html.cc[data-cc="5"] .w .w-dock { left: calc(50% - 230px); right: calc(50% - 230px); bottom: 14px; padding-right: 14px; transform: scale(1.25); transform-origin: 50% 100%; }
@@ -75,11 +76,17 @@ html.control, html.control body { background: var(--cc-bg) !important; overflow:
 html.control { --cc-bg: #f4f3ef; --chip: #fff; --edge: rgba(0,0,0,.09); --shadow: 0 1px 3px rgba(0,0,0,.08); --ink: #1d1c1a; --muted: #6f6c66; --line: rgba(0,0,0,.1); --gold: #c98a12; --row: #f6f5f2; --can: #fff3d6; }
 html.control[data-theme="dark"] { --cc-bg: #141419; --chip: rgba(24,24,30,.94); --edge: rgba(255,255,255,.12); --shadow: 0 2px 10px rgba(0,0,0,.32), 0 0 0 .5px rgba(0,0,0,.6); --ink: #f3f1ec; --muted: #a3a09a; --line: rgba(255,255,255,.14); --gold: #f2b53a; --row: rgba(255,255,255,.06); --can: rgba(242,181,58,.14); }
 html.control .page > :not(#game):not(.menu) { display: none !important; }
+/* the page (its boxes: the wish, ascending, the ki tree a gift opens) over the panel, taking clicks only on them */
+html.control .scroller, html.control .page { z-index: 10; pointer-events: none; }
+html.control .page .menu { pointer-events: auto; }
 html.control #game { position: fixed; inset: 0; z-index: 30; pointer-events: none; background: none !important; border: 0; }
 html.control #game > :not(.wish):not(.toast):not(.stage) { display: none !important; }
 html.control #game > .stage { visibility: hidden; }   /* kept its size: the page sizes its (unused) canvas from it */
-html.control #game .wish { pointer-events: auto; position: fixed; left: 50%; top: 50%; bottom: auto; right: auto; transform: translate(-50%, -50%); width: min(340px, calc(100% - 24px)); }
-html.control #game .toast { position: fixed; top: auto; bottom: 12px; left: 50%; transform: translate(-50%, 6px); max-width: calc(100% - 32px); padding: 6px 14px 7px; font-size: 15px; font-style: normal; -webkit-text-stroke: 0; color: var(--ink); background: var(--chip); border: 1px solid var(--edge); border-radius: 999px; box-shadow: var(--shadow); }
+html.control #game .wish { pointer-events: auto; position: fixed; left: 50%; top: 50%; bottom: auto; right: auto; transform: translate(-50%, -50%); width: min(360px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; padding: 14px; background: var(--cc-bg); border: 1px solid var(--edge); border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+html.control #game .wish p { margin: 0 0 4px; font-size: 20px; color: var(--ink); -webkit-text-stroke: 0; text-shadow: none; }
+html.control #game .wish button { color: var(--ink); background: var(--row); border-color: var(--line); }
+html.control #game .wish button b { color: var(--ink); } html.control #game .wish button span { color: var(--muted); }
+html.control #game .toast { position: fixed; top: auto; bottom: 14px; left: 50%; transform: translate(-50%, 6px); max-width: calc(100% - 32px); padding: 6px 14px 7px; font-size: 15px; font-style: normal; -webkit-text-stroke: 0; color: var(--ink); background: var(--chip); border: 1px solid var(--edge); border-radius: 999px; box-shadow: var(--shadow); }
 html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc { --pad: 10px; position: fixed; inset: 0; z-index: 1; display: flex; gap: var(--pad); padding: var(--pad); box-sizing: border-box; color: var(--ink); font-size: 12px; overflow: hidden; }
 #cc * { box-sizing: border-box; }
@@ -140,7 +147,7 @@ html.control:not([data-cc="3"]) #cc .w [data-w="share"] { display: none !importa
 #cc .char { padding: 8px 4px 6px; border-radius: 12px; } #cc .char.on { border-color: var(--gold); background: var(--can); }
 #cc .char canvas { width: 52px; image-rendering: pixelated; }
 #cc .carousel { display: flex; gap: 6px; padding: 6px; overflow: auto hidden; }
-#cc .carousel .char { flex: 1 0 0; min-width: 64px; padding: 6px 2px 4px; gap: 3px; font-size: 10px; }
+#cc .carousel .char { flex: 1 0 0; min-width: 0; padding: 6px 2px 4px; gap: 3px; font-size: 10px; }
 #cc .carousel .char span { display: none; } #cc .carousel .char canvas { width: 34px; }
 #cc [data-icons="pills"] { display: flex; flex-wrap: wrap; gap: 4px; }
 #cc .ach { color: var(--muted); background: var(--row); border-color: var(--line); padding: 4px 10px; font-size: 10px; }
@@ -170,9 +177,11 @@ html.control:not([data-cc="3"]) #cc .w [data-w="share"] { display: none !importa
 #cc .tile.big:disabled { opacity: .8; }
 #cc .tile.more { align-items: center; justify-content: center; gap: 4px; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .06em; text-align: center; }
 #cc .tile.more b { color: var(--gold); font-size: 18px; font-family: var(--serif); }
+#cc .tile.more span { font-size: 9px; line-height: 1.5; }
+#cc .toastslot { flex: none; height: 34px; }
 #cc .bulkt { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px 14px; font: inherit; color: var(--ink); cursor: pointer; }
 #cc .bulkt b { font-weight: 400; font-size: 16px; color: var(--gold); }
-#cc .sheet { position: fixed; inset: var(--pad); z-index: 5; display: flex; flex-direction: column; }
+#cc .sheet { position: fixed; inset: var(--pad); z-index: 5; display: flex; flex-direction: column; background: var(--cc-bg); box-shadow: 0 12px 40px rgba(0,0,0,.45); }
 #cc .sheet .x { flex: none; width: 34px; font: inherit; font-size: 16px; color: var(--muted); background: none; border: 0; cursor: pointer; }
 /* 4 and 2: the chip as a strip beside the buttons */
 #cc .top .dw-chip { flex: 1; min-width: 0; flex-direction: row; align-items: center; gap: 14px; }
@@ -286,7 +295,7 @@ html.control.photo #cc { visibility: hidden; }
       clearInterval(live); live = setInterval(frame, 260); frame();
       return box;
     }
-    const icon = k => { const b = document.querySelector(`.w [data-w="${k}"] svg`); return b ? b.outerHTML : SVG.more; };
+    const icon = k => { const b = document.querySelector(`.w [data-w="${k}"] svg`); return b ? b.outerHTML : SVG.more.replace('<svg', '<svg class="ph"'); };
     function deckView() {
       const box = el('div', 'deck');
       const rows = [...$('shop').querySelectorAll('[data-buy]')].map(b => ({ key: b.dataset.buy }));
@@ -294,7 +303,7 @@ html.control.photo #cc { visibility: hidden; }
         const b = el('button', 'tile'); b.type = 'button'; b.dataset.tile = t.kind; if (t.key) b.dataset.key = t.key;
         if (t.kind === 'kaio') { b.className = 'tile big t-kaio'; b.innerHTML = `${icon('kaio')}<span></span>`; b.addEventListener('click', () => $('kaio').click()); }
         else if (t.kind === 'itx') { b.className = 'tile big t-itx'; b.innerHTML = `${icon('itx')}<span></span>`; b.addEventListener('click', () => $('itxBtn').click()); }
-        else if (t.kind === 'more') { b.className = 'tile more'; b.innerHTML = '<b data-n="tree"></b><span>ki tree · heroes · achievements</span>'; b.addEventListener('click', () => { sheet = true; if (tab === 'up') tab = 'tree'; build(); }); }
+        else if (t.kind === 'more') { b.className = 'tile more'; b.innerHTML = '<b data-n="tree"></b><span>ki tree<br>heroes<br>achievements</span>'; b.addEventListener('click', () => { sheet = true; if (tab === 'up') tab = 'tree'; build(); }); }
         else { b.innerHTML = '<div><b></b><br><i></i></div><em></em>'; b.addEventListener('click', () => { const r = $('shop').querySelector(`[data-buy="${t.key}"]`); if (r && !r.disabled) r.click(); }); }
         box.append(b);
       }
@@ -329,7 +338,7 @@ html.control.photo #cc { visibility: hidden; }
         const sh = el('div', 'card'); sh.style.flex = 'none'; sh.append(shop('grid2', 'nobulk'));
         const tr = el('div', 'card pane'), th = el('div', 'card'); th.style.flex = 'none';
         tr.append(menuPart('tree', { tight: true })); th.append(menuPart('heroes', { row: true }));
-        c.append(heading('upgrades', 'up'), sh, heading('ki tree', 'tree'), tr, heading('heroes', 'heroes'), th);
+        c.append(heading('upgrades', 'up'), sh, heading('ki tree', 'tree'), tr, heading('heroes', 'heroes'), th, el('div', 'toastslot'));   // its toasts show here
         cc.append(c);
       } else if (layout === 3) {
         const left = col(liveView()); left.style.flex = '0 0 280px'; chipRail(left);
@@ -386,6 +395,7 @@ html.control.photo #cc { visibility: hidden; }
       for (const [k, id] of [['kaio', 'kaio'], ['itx', 'itxBtn']]) {
         const t = cc.querySelector(`.t-${k}`), src = $(id), round = document.querySelector(`.w [data-w="${k}"]`); if (!t || !src) continue;
         t.hidden = src.hidden; t.disabled = src.disabled;
+        const ph = t.querySelector('svg.ph'); if (ph && round) ph.outerHTML = round.querySelector('svg').outerHTML;   // the skin's icons came in after the deck
         const name = CONTROL.label(src.title || src.getAttribute('aria-label'), src.firstChild && src.firstChild.textContent);
         const sp = t.querySelector('span'), left = src.querySelector('small');
         const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) sp.textContent = text;
