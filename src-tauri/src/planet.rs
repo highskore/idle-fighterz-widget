@@ -224,6 +224,9 @@ impl Core {
         if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
+        // centred across in any window: the site's layout puts it at .56 in a wide one, beside its text, and a stretched window
+        // or fullscreen is wide
+        bridge.game.cam.fcx = Some(0.5);
         Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new(), saver: OnceLock::new(), paused: Mutex::new(false) }
     }
 
@@ -956,6 +959,17 @@ mod tests {
         assert!(finite(&[0.0, -3.5, 1e300]).is_ok());
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(finite(&[1.0, bad]).is_err(), "{bad}");
+        }
+    }
+
+    // a stretched window or fullscreen is wide: the planet stays centred across, at any scale and world
+    #[test]
+    fn a_wide_window_centres_the_planet() {
+        let (app, w) = app(std::env::temp_dir().join(format!("idle-fighterz-wide-{}.json", std::process::id())));
+        for (cw, ch, scale) in [(378.0, 237.0, 4.0), (384.0, 216.0, 5.0), (688.0, 288.0, 5.0), (512.0, 160.0, 5.0), (200.0, 200.0, 2.0)] {
+            call(&w, "resize", json!({ "w": cw, "h": ch, "scale": scale }));
+            let cx = app.state::<Core>().with(|b| b.game.cam.cx).unwrap();
+            assert_eq!(cx, (cw / 2.0_f64).round(), "{cw}x{ch}");
         }
     }
 
