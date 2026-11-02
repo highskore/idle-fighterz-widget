@@ -158,7 +158,8 @@ GAMES.push({
     st.cv.addEventListener('contextmenu', e => { if (itxOwn) e.preventDefault(); });   // right-click is instant transmission's once it's owned
     // fullscreen mode (settings): Esc leaves it for the mode it came from once no panel is open (the page's own Esc closes
     // the upgrades, the menu, a box or the drawer first), and F11 toggles it (⌃⌘F on macOS, where F11 shows the desktop).
-    // The window fills its display then: square corners, and no dragging it. Wider than 760px the page would give toasts
+    // The window fills its display then: square corners, and no dragging it. ⌘/ctrl +, − and 0 step the UI size and ⌥/alt
+    // the planet size (hud-keys.js), kept in the settings. Wider than 760px the page would give toasts
     // the site's bare italic, unreadable on a dark world: they keep the widget's pill, sized for the display
     const fullCss = document.createElement('style');
     fullCss.textContent = `html.full.widget.windowed #game { border: 0; border-radius: 0; }
@@ -180,13 +181,11 @@ GAMES.push({
     const Win = tauri.window.Window, drag = Win?.prototype.startDragging;
     if (drag) Win.prototype.startDragging = function () { return full ? Promise.resolve() : drag.call(this); };
     addEventListener('keydown', e => {
-      if (e.repeat) return;
-      const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
-      const toggle = mac ? e.code === 'KeyF' && e.metaKey && e.ctrlKey && !e.altKey && !e.shiftKey : e.key === 'F11' && plain;
-      const open = document.querySelector('#shop.open, .menu:not([hidden])') || root.classList.contains('dw-open');
-      if (toggle || (e.key === 'Escape' && plain && full && !open && !panel)) {
-        e.preventDefault(); tauri.core.invoke('fullscreen', { on: !full }).catch(err => console.error('fullscreen', err));
-      }
+      const a = HudKeys.action(e, mac, full, panel || !!(document.querySelector('#shop.open, .menu:not([hidden])') || root.classList.contains('dw-open')));
+      if (!a || (panel && !('fullscreen' in a))) return;   // the panel: only the fullscreen toggle (its Esc closes its own boxes)
+      e.preventDefault();
+      const done = 'fullscreen' in a ? tauri.core.invoke('fullscreen', { on: a.fullscreen }) : tauri.core.invoke('step_size', a);
+      done.catch(err => console.error('keys', err));
     }, true);
     addEventListener('keydown', e => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, [contenteditable]')) return;

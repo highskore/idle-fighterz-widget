@@ -29,7 +29,7 @@ const CONTROL = (() => {
   function lens(s, who) {
     if (!s || who === 'solo') return s;
     const layout = pick(s.control_layout);
-    if (who === 'panel') return Object.assign({}, s, { skin: 'drawer', layout: 7, hud: 'always', mode: 'window', opacity: 1, clouds: 'never' });
+    if (who === 'panel') return Object.assign({}, s, { skin: 'drawer', layout: 7, hud: 'always', mode: 'window', opacity: 1, clouds: 'never', ui_size: 'medium' });
     return Object.assign({}, s, layout === 5 ? { skin: 'classic', layout: 7 } : { skin: 'drawer' }, { hud: 'always' });
   }
 

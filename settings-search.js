@@ -14,6 +14,7 @@
     battery_auto: 'power battery unplugged laptop energy low power mode saver',
     mode: 'floating window card frame background fullscreen full screen maximise maximize',
     planet_size: 'planet size bigger smaller zoom scale huge large small',
+    ui_size: 'ui interface hud buttons text font size bigger smaller zoom scale huge large small',
     control: 'control centre center panel second screen monitor display dashboard window fullscreen',
     control_layout: 'control centre center layout drawer sidebar wide deck stream mission panel',
     ghost: 'click through clickthrough mouse ignore clicks input passthrough',
