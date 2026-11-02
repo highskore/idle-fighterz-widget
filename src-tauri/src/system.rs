@@ -155,7 +155,7 @@ fn watch_screen(app: AppHandle, wayland: bool) {
         let mut was = None;
         loop {
             // fullscreen, the widget is the fullscreen app in front: it would hide itself
-            let on = setting(&app, |s| s["auto_hide"].as_bool().unwrap_or(false) && s["mode"] != "fullscreen");
+            let on = setting(&app, |s| s["auto_hide"].as_bool().unwrap_or(false) && !crate::fullscreen_on(s));
             let ours = app.state::<Sys>().auto_hidden.load(Relaxed);
             let visible = app.state::<Shown>().get();
             if !ours && !(on && visible) {

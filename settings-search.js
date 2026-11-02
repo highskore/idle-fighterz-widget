@@ -13,6 +13,7 @@
     fps: 'frame rate fps smooth performance cpu speed animation',
     battery_auto: 'power battery unplugged laptop energy low power mode saver',
     mode: 'floating window card frame background fullscreen full screen maximise maximize',
+    planet_size: 'planet size bigger smaller zoom scale huge large small',
     ghost: 'click through clickthrough mouse ignore clicks input passthrough',
     auto_hide: 'fullscreen full screen presentation slideshow games hide',
     clouds: 'weather sky',

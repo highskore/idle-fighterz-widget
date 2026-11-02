@@ -107,14 +107,19 @@ pub fn recall(places: &Value, key: &str) -> Option<(f64, f64)> {
     Some((p["x"].as_f64()?, p["y"].as_f64()?))
 }
 
-/// Where the window goes leaving fullscreen from `filled`: the frame it had (`was`), pulled on screen if its display went;
-/// else, as it started fullscreen, `side` square at the place `kept` for this arrangement, or centred where it is.
-pub fn back(was: Option<R>, kept: Option<(f64, f64)>, side: f64, filled: R, areas: &[R]) -> Option<R> {
-    let to = was.unwrap_or_else(|| {
-        let a = areas.get(nearest(filled, areas).unwrap_or(0)).copied().unwrap_or(filled);
-        let (x, y) = kept.unwrap_or((a.x + (a.w - side) / 2.0, a.y + (a.h - side) / 2.0));
-        R { x, y, w: side, h: side }
-    });
+/// Where the window goes leaving fullscreen from `filled`: with `keep`, the frame it had (`was`); otherwise `side` square
+/// where that frame was, or (if it started fullscreen) at the place `kept` for this arrangement, or centred. Pulled on
+/// screen either way, in case its display went.
+pub fn back(was: Option<R>, keep: bool, kept: Option<(f64, f64)>, side: f64, filled: R, areas: &[R]) -> Option<R> {
+    let to = match was {
+        Some(was) if keep => was,
+        Some(was) => R { w: side, h: side, ..was },
+        None => {
+            let a = areas.get(nearest(filled, areas).unwrap_or(0)).copied().unwrap_or(filled);
+            let (x, y) = kept.unwrap_or((a.x + (a.w - side) / 2.0, a.y + (a.h - side) / 2.0));
+            R { x, y, w: side, h: side }
+        }
+    };
     let (x, y) = clamp(to, areas)?;
     Some(R { x, y, ..to })
 }
@@ -189,13 +194,20 @@ fn reframe<T: Runtime>(w: &WebviewWindow<T>, at: R, to: R) {
 // ── fullscreen: not the OS's (on macOS a Space of its own, which a window on every Space, kept on top, from an app with no
 // Dock icon doesn't fit), but the window filling its display
 
-/// While the window fills its display (its frame isn't the widget's place): the frame it had before, if it had one
-pub struct Full(Mutex<Option<Option<R>>>);
+/// While the window fills its display (its frame isn't the widget's place)
+#[derive(Clone, Copy)]
+struct Fill {
+    was: Option<R>, // the frame it had, if it had one (not when it started fullscreen)
+    side: f64,      // the size setting then
+    to: Option<R>,  // the frame it was last given
+}
+
+pub struct Full(Mutex<Option<Fill>>);
 
 impl Full {
     /// `on`: it starts fullscreen, with no frame of its own to go back to
-    pub fn new(on: bool) -> Self {
-        Full(Mutex::new(on.then_some(None)))
+    pub fn new(on: bool, side: f64) -> Self {
+        Full(Mutex::new(on.then_some(Fill { was: None, side, to: None })))
     }
 }
 
@@ -203,30 +215,38 @@ pub fn filled(app: &AppHandle) -> bool {
     app.try_state::<Full>().is_some_and(|f| f.0.lock().unwrap().is_some())
 }
 
-/// `on`: the window fills the display it's on (again, if that changed). Off: it goes back where it was, or (if it started
-/// fullscreen) `side` points square at its place for this arrangement. Whether it left fullscreen. With no displays yet
-/// it waits for `arrive`.
-pub fn fullscreen(app: &AppHandle, on: bool, side: f64) -> bool {
-    let (Some(w), Some(full)) = (app.get_webview_window("main"), app.try_state::<Full>()) else { return false };
-    let was = *full.0.lock().unwrap();
-    if !on && was.is_none() {
-        return false;
+/// The window fills the display it's on, again if that changed. `again`: even if that's the frame it was last given (the
+/// displays, its scale or its visibility changed); a move alone doesn't redo it, as a window manager may not place it
+/// exactly. With no displays yet it's still fullscreen, and `arrive` fills it once there are.
+pub fn fill_display(app: &AppHandle, side: f64, again: bool) {
+    let (Some(w), Some(full)) = (app.get_webview_window("main"), app.try_state::<Full>()) else { return };
+    let at = frame(&w);
+    let mut f = full.0.lock().unwrap().unwrap_or(Fill { was: at, side, to: None });
+    let to = at.zip(desk(&w)).and_then(|(at, d)| fill(at, &d.frames, &d.areas, cfg!(target_os = "macos")));
+    let redo = to.is_some() && (again || to != f.to);
+    if redo {
+        f.to = to;
     }
+    *full.0.lock().unwrap() = Some(f);
+    if let (true, Some(at), Some(to)) = (redo, at, to) {
+        reframe(&w, at, to);
+    }
+}
+
+/// Leaves fullscreen: back to the frame it had if `same` (the mode it came from, at the size it had), else `side` points
+/// square where it was (see `back`). Whether it went back to that frame.
+pub fn leave_display(app: &AppHandle, side: f64, same: bool) -> bool {
+    let (Some(w), Some(full)) = (app.get_webview_window("main"), app.try_state::<Full>()) else { return false };
+    let Some(f) = full.0.lock().unwrap().take() else { return false };
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return false };
     let mac = cfg!(target_os = "macos");
-    if on {
-        let Some(to) = fill(at, &d.frames, &d.areas, mac) else { return false };
-        *full.0.lock().unwrap() = Some(was.unwrap_or(Some(at)));
-        reframe(&w, at, to);
-        return false;
-    }
     let k = nearest(at, &d.frames).map_or(1.0, |i| if mac { 1.0 } else { d.scales[i] });
+    let keep = same && (f.side - side).abs() < 0.5;
     let kept = app.try_state::<Places>().and_then(|p| recall(&p.list.lock().unwrap(), &d.key));
-    *full.0.lock().unwrap() = None;
-    if let Some(to) = back(was.flatten(), kept, side * k, at, &d.areas) {
+    if let Some(to) = back(f.was, keep, kept, side * k, at, &d.areas) {
         reframe(&w, at, to);
     }
-    true
+    keep && f.was.is_some()
 }
 
 /// the move watcher: woken by every move of the main window
@@ -301,7 +321,8 @@ pub fn watch(app: &AppHandle, file: PathBuf) {
             let (tx, rx) = std::sync::mpsc::channel();
             let h = a.clone();
             let _ = a.run_on_main_thread(move || {
-                let _ = tx.send(h.get_webview_window("main").and_then(|w| desk(&w)).map(|d| d.key));
+                // the work areas too: a Dock or taskbar that grows or hides changes what fullscreen fills, not the arrangement
+                let _ = tx.send(h.get_webview_window("main").and_then(|w| desk(&w)).map(|d| format!("{}{:?}", d.key, d.areas)));
             });
             if let Ok(Some(key)) = rx.recv_timeout(Duration::from_secs(5)) {
                 if key != last {
@@ -347,7 +368,7 @@ pub fn settle(app: &AppHandle, dragged: bool) {
 fn arrive(app: &AppHandle, first: bool) {
     let Some(w) = app.get_webview_window("main") else { return };
     if filled(app) {
-        return crate::refit(app);
+        return crate::refit(app, true);
     }
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return };
     let kept = recall(&app.state::<Places>().list.lock().unwrap(), &d.key);
@@ -482,12 +503,22 @@ mod tests {
         let laptop = R { x: 0.0, y: 25.0, w: 1512.0, h: 920.0 };
         let external = R { x: 1512.0, y: 0.0, w: 2560.0, h: 1415.0 };
         let (filled, was) = (laptop, R { x: 1000.0, y: 500.0, w: 480.0, h: 360.0 });
-        assert_eq!(back(Some(was), Some((8.0, 33.0)), 400.0, filled, &[laptop, external]), Some(was), "the frame it had, size and all");
+        let both = [laptop, external];
+        assert_eq!(back(Some(was), true, Some((8.0, 33.0)), 400.0, filled, &both), Some(was), "the frame it had, size and all");
         let off = R { x: 3000.0, y: 900.0, ..was };
-        assert_eq!(back(Some(off), None, 400.0, filled, &[laptop]), Some(R { x: 1032.0, y: 585.0, ..was }), "its display went: on screen");
+        assert_eq!(back(Some(off), true, None, 400.0, filled, &[laptop]), Some(R { x: 1032.0, y: 585.0, ..was }), "its display went: on screen");
         let side = R { x: 8.0, y: 33.0, w: 400.0, h: 400.0 };
-        assert_eq!(back(None, Some((8.0, 33.0)), 400.0, filled, &[laptop, external]), Some(side), "started fullscreen: its kept place");
-        assert_eq!(back(None, None, 400.0, external, &[laptop, external]), Some(R { x: 2592.0, y: 507.5, w: 400.0, h: 400.0 }), "no place kept: centred on its display");
-        assert_eq!(back(Some(was), None, 400.0, filled, &[]), None, "no displays: left as it is");
+        assert_eq!(back(None, true, Some((8.0, 33.0)), 400.0, filled, &both), Some(side), "started fullscreen: its kept place");
+        assert_eq!(back(None, true, None, 400.0, external, &both), Some(R { x: 2592.0, y: 507.5, w: 400.0, h: 400.0 }), "no place kept: centred on its display");
+        assert_eq!(back(Some(was), true, None, 400.0, filled, &[]), None, "no displays: left as it is");
+    }
+
+    // entered from a 480×360 window, then floating (or another size) picked: where it was, but the preset's square
+    #[test]
+    fn leaving_fullscreen_for_another_mode_or_size_takes_the_preset() {
+        let laptop = R { x: 0.0, y: 25.0, w: 1512.0, h: 920.0 };
+        let was = R { x: 1000.0, y: 500.0, w: 480.0, h: 360.0 };
+        assert_eq!(back(Some(was), false, Some((8.0, 33.0)), 400.0, laptop, &[laptop]), Some(R { x: 1000.0, y: 500.0, w: 400.0, h: 400.0 }));
+        assert_eq!(back(Some(was), false, None, 560.0, laptop, &[laptop]), Some(R { x: 952.0, y: 385.0, w: 560.0, h: 560.0 }), "bigger: pulled on screen");
     }
 }

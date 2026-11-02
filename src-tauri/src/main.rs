@@ -38,7 +38,7 @@ mod update;
 
 // every setting and its default; a saved file only overrides keys listed here
 const DEFAULTS: &str = r#"{
-  "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "mode_prev": "floating", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
+  "on_top": true, "size": 400, "opacity": 1, "layout": 7, "hud": "hover", "clouds": "hover", "cloud_shape": "c", "cloud_amount": 2, "mode": "floating", "mode_prev": "floating", "planet_size": "medium", "menubar_power": true, "fps": 30, "tray_icon": "auto", "update_check": true,
   "notify": { "raid": true, "shenron": true, "trip": true, "pod": false, "ascend": true },
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true, "raid_windows": false, "screen_beam": false,
@@ -320,11 +320,12 @@ fn fullscreen(app: AppHandle, on: bool) -> Result<(), String> {
     set_settings(app, json!({ "mode": if on { json!("fullscreen") } else { s["mode_prev"].clone() } }))
 }
 
-// fullscreen, the window fills its display again: the displays changed, its scale did, or it was moved to another
-fn refit(app: &AppHandle) {
+// fullscreen, the window fills its display again: `again` when the displays, its scale or its visibility changed, and
+// not for a move, unless that put it on another display
+fn refit(app: &AppHandle, again: bool) {
     let s = app.state::<State>().settings.lock().unwrap().clone();
     if fullscreen_on(&s) && !app.state::<State>().wayland {
-        place::fullscreen(app, true, prefs::size(&s["size"]));
+        place::fill_display(app, prefs::size(&s["size"]), again);
     }
 }
 
@@ -361,15 +362,19 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     let side = prefs::size(&s["size"]);
     let full = fullscreen_on(s);
     let _ = win.set_always_on_top(on_top);
-    let left = if app.state::<State>().wayland {
+    // leaving for the mode it came from, at the size it had, it goes back to the frame it had; otherwise to the preset
+    let back = if app.state::<State>().wayland {
         if win.is_fullscreen().unwrap_or(false) != full {
             let _ = win.set_fullscreen(full);
         }
         false
+    } else if full {
+        place::fill_display(app, side, false);
+        false
     } else {
-        place::fullscreen(app, full, side)
+        place::leave_display(app, side, s["mode"] == s["mode_prev"])
     };
-    if resize && !full && !left {
+    if resize && !full && !back {
         let _ = win.set_size(LogicalSize::new(side, side));
         place::settle(app, false); // a bigger widget near an edge stays on screen
     }
@@ -510,7 +515,7 @@ fn show_widget(app: &AppHandle, show: bool) {
     let Some(win) = app.get_webview_window("main") else { return };
     let _ = if show { win.show() } else { win.hide() }; // hidden, the page gets no animation frames and stops drawing
     if show {
-        refit(app); // the displays may have changed while it was hidden
+        refit(app, true); // the displays may have changed while it was hidden
     }
     // WebView2 doesn't hear that its window hid: unless told, the page stays "visible" and keeps drawing
     #[cfg(target_os = "windows")]
@@ -576,9 +581,6 @@ fn restyle_settings(app: &AppHandle, style: &Value) {
 
 #[tauri::command]
 fn quit(app: AppHandle) {
-    // the position kept is the widget's, so the next launch opens on the display it was on
-    let side = prefs::size(&app.state::<State>().settings.lock().unwrap()["size"]);
-    place::fullscreen(&app, false, side);
     let _ = app.save_window_state(StateFlags::POSITION);
     app.exit(0);
 }
@@ -853,12 +855,12 @@ fn main() {
             }
             if place::filled(w.app_handle()) {
                 let h = w.app_handle().clone();
-                let _ = w.app_handle().run_on_main_thread(move || refit(&h));
+                let _ = w.app_handle().run_on_main_thread(move || refit(&h, false));
             }
         }
         (tauri::WindowEvent::ScaleFactorChanged { .. }, "main") => {
             let h = w.app_handle().clone();
-            let _ = w.app_handle().run_on_main_thread(move || refit(&h));
+            let _ = w.app_handle().run_on_main_thread(move || refit(&h, true));
         }
         (tauri::WindowEvent::Focused(false), popover::LABEL) => popover::blurred(w.app_handle()),
         // Alt+F4 and the like hide the widget as the menu does: destroyed, it would be gone for good
@@ -879,7 +881,7 @@ fn main() {
             let (transparent, wayland) = (can_be_transparent(&main), wayland(&main));
             app.manage(system::Sys::default());
             app.manage(State { settings: Mutex::new(settings.clone()), file, tray: Mutex::new(None), power: Mutex::new(String::new()), transparent, wayland, tray_nudge: Mutex::new(None), #[cfg(feature = "rust-core")] sent: Mutex::default(), tray_profiles: Mutex::new(None) });
-            app.manage(place::Full::new(fullscreen_on(&settings) && !wayland));
+            app.manage(place::Full::new(fullscreen_on(&settings) && !wayland, prefs::size(&settings["size"])));
             popover::init(app.handle());
             tray(app.handle())?;
             apply(app.handle(), &settings, true);
@@ -1536,13 +1538,13 @@ mod tests {
         for cmd in ["get_settings", "set_settings", "quit", "notify_permission", "request_notify_permission", "open_notify_settings", "focus_status", "snooze", "save_profile", "delete_profile", "apply_profile", "glance", "preview_frame"] {
             assert!(call(&settings, cmd), "settings may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "planet_start", "planet_buy", "planet_buy_n", "planet_fps", "planet_view", "planet_pixels", "planet_mask", "tray_action", "hide_popover"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "page_state", "set_sound", "photo", "photo_exit", "fullscreen", "planet_start", "planet_buy", "planet_buy_n", "planet_fps", "planet_view", "planet_pixels", "planet_mask", "tray_action", "hide_popover"] {
             assert!(!call(&settings, cmd), "settings may not call {cmd}");
         }
         for cmd in ["get_settings", "set_settings", "glance", "tray_action", "hide_popover"] {
             assert!(call(&popover, cmd), "the popover may call {cmd}");
         }
-        for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "planet_start", "planet_buy", "planet_buy_n", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
+        for cmd in ["notify", "tray_title", "hide_widget", "set_sound", "photo", "fullscreen", "planet_start", "planet_buy", "planet_buy_n", "planet_pixels", "preview_frame", "save_profile", "snooze", "open_settings"] {
             assert!(!call(&popover, cmd), "the popover may not call {cmd}");
         }
     }
