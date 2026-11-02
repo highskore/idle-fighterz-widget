@@ -16,5 +16,8 @@ writeFileSync(join(root, 'dist', 'hud.html'), hud)
 // the control centre's window (control.js): the same page, marked as the panel
 const tag = '<html lang="en" class="widget">'
 if (hud.split(tag).length !== 2) throw new Error('the widget page has no <html class="widget">')
-writeFileSync(join(root, 'dist', 'control.html'), hud.replace(tag, '<html lang="en" class="widget control">').replace('<script src="onboard.js"></script>\n', ''))   // no first-run card there
+// no first-run card there
+const control = hud.replace(tag, '<html lang="en" class="widget control">').replace('<script src="onboard.js"></script>\n', '')
+if (control.includes('onboard.js')) throw new Error('control.html would carry the first-run card')
+writeFileSync(join(root, 'dist', 'control.html'), control)
 console.log(join(root, 'dist', 'hud.html'), 'and control.html written')

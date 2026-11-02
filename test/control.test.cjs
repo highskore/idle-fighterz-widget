@@ -41,16 +41,21 @@ test('each page takes the settings its way', () => {
   assert.equal(s.skin, 'scouter', 'the settings themselves are left as they were');
 });
 
-test('every layout reaches upgrades, the ki tree, heroes and achievements', () => {
+test('every layout reaches the power, upgrades, the ki tree and heroes, with parts build() can place', () => {
   for (const l of C.LAYOUTS) {
-    const p = C.parts(l), has = k => p.includes(k);
+    const p = C.parts(l), has = k => p.includes(k) || p.includes('more:' + k);
+    assert.ok(has('hud') || has('top'), `${l}: the power and the buttons`);
     assert.ok(has('up') || has('shop') || has('deck'), `${l}: upgrades`);
-    assert.ok(has('chip') || has('top'), `${l}: the power`);
-    // the deck keeps the menus behind its last tile
-    if (l !== 4) for (const k of ['tree', 'heroes']) assert.ok(has(k), `${l}: ${k}`);
+    for (const k of ['tree', 'heroes']) assert.ok(has(k), `${l}: ${k}`);
+    for (const col of C.PLAN[l].cols) for (const part of col.parts) {
+      if (part.startsWith('tabs:')) for (const t of part.slice(5).split(',')) assert.ok(C.TABS.includes(t), `${l}: tab ${t}`);
+      else assert.ok(C.PARTS.includes(part), `${l}: ${part}`);
+    }
+    for (const t of C.PLAN[l].more || []) assert.ok(C.TABS.includes(t), `${l}: behind the deck, ${t}`);
   }
-  assert.ok(C.parts(1).includes('ach') && C.parts(3).includes('ach') && C.parts(5).includes('ach'));
-  assert.ok(C.parts(2).includes('toast') && !C.parts(1).includes('toast'), 'the panel has a toast only where it shows them');
+  for (const l of [1, 3, 4, 5]) assert.ok(C.parts(l).some(p => p.endsWith('ach')), `${l}: achievements`);
+  assert.deepEqual(C.LAYOUTS.filter(l => C.parts(l).includes('toast')), C.LAYOUTS.filter(C.toastsOnPanel), 'room for toasts where the panel shows them');
+  assert.ok(C.parts(3).includes('live') && C.LAYOUTS.filter(l => C.parts(l).includes('live')).length === 1, 'only 3 has the live planet (the app feeds only it)');
   assert.equal(C.pick(9), 1); assert.equal(C.pick('3'), 3);
 });
 

@@ -33,15 +33,24 @@ const CONTROL = (() => {
     return Object.assign({}, s, layout === 5 ? { skin: 'classic', layout: 7 } : { skin: 'drawer' }, { hud: 'always' });
   }
 
-  // what each layout's panel holds: its columns of parts, and the tabs ('tabs') or sheet ('more') for the rest
+  // what each layout's panel holds, as build() lays it out: its columns (a width in px, or the rest), each a list of
+  // parts: 'hud' the chip and round buttons, 'top' those as a strip, 'tabs:…' parts behind tabs, 'shop' 'tree' 'heroes'
+  // 'ach' a part under its heading, 'live' the planet, 'deck' the tiles, 'toast' room for the panel's toasts; 'more' the
+  // parts behind the deck's last tile. `shop` dresses the upgrades list, `tight` the ki tree in a column
   const PLAN = {
-    1: [['chip', 'rail', 'tabs:up,tree,heroes,ach']],
-    2: [['top', 'shop', 'tree', 'heroes', 'toast']],
-    3: [['live', 'chip', 'rail'], ['tabs:up,tree,heroes,ach']],
-    4: [['top', 'deck']],
-    5: [['chip', 'rail', 'heroes', 'ach'], ['shop'], ['tree']],
+    1: { cols: [{ parts: ['hud', 'tabs:up,tree,heroes,ach'] }], shop: ['desc'] },
+    2: { cols: [{ parts: ['top', 'shop', 'tree', 'heroes', 'toast'] }], shop: ['grid2', 'nobulk'], tight: true },
+    3: { cols: [{ w: 280, parts: ['live', 'hud'] }, { parts: ['tabs:up,tree,heroes,ach'] }], shop: ['grid2'] },
+    4: { cols: [{ parts: ['top', 'deck'] }], more: ['tree', 'heroes', 'ach'] },
+    5: { cols: [{ w: 250, parts: ['hud', 'heroes', 'ach'] }, { w: 260, parts: ['shop'] }, { parts: ['tree'] }], tight: true },
   };
-  const parts = layout => PLAN[pick(layout)].flat().flatMap(p => (p.startsWith('tabs:') ? p.slice(5).split(',') : [p]));
+  // the parts build() can place, and the tabs it can show
+  const PARTS = ['hud', 'top', 'shop', 'tree', 'heroes', 'ach', 'live', 'deck', 'toast'], TABS = ['up', 'tree', 'heroes', 'ach'];
+  // every part a layout shows (tabs and the deck's sheet opened out), as build() places them
+  const parts = layout => { const p = PLAN[pick(layout)]; return [...p.cols.flatMap(c => c.parts), ...(p.more || []).map(k => 'more:' + k)].flatMap(x => (x.startsWith('tabs:') ? x.slice(5).split(',') : [x])); };
+  // whether the panel is being used: focused, or the pointer over it lately (hud.js fetches the menus more often then)
+  let usedAt = -1e9;
+  const active = () => typeof document === 'object' && (document.hasFocus() || performance.now() - usedAt < 5000);
 
   // a stream deck's tiles: the hero's boost (tall, first), every upgrade, then transmission and the tile for the rest
   function deck(rows, itx) {
@@ -99,7 +108,6 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 /* the drawer's chip and buttons, out of their corners */
 #cc .w { position: static; inset: auto; z-index: auto; pointer-events: auto; display: contents; }
 #cc .w .dw-tab, #cc .w [data-w="close"], #cc .w [data-w="up"], #cc[data-l="4"] .w :is([data-w="kaio"], [data-w="itx"]) { display: none !important; }
-html.control:not([data-cc="3"]) #cc .w [data-w="share"] { display: none !important; }
 #cc .dw-chip { position: static; flex: none; display: flex; padding: 12px 16px 13px; gap: 6px; }
 #cc .dw-n { font-size: 38px; } #cc .dw-r { font-size: 11px; } #cc .dw-chip > i { height: 3px; }
 #cc .dw-rail { position: static; flex: none; display: flex; flex-wrap: wrap; gap: 8px; }
@@ -197,55 +205,54 @@ html.control.photo #cc { visibility: hidden; }
   };
 
   // the control window's page: the drawer's chip and buttons, the page's own upgrades list, and the ki tree, heroes and
-  // achievements drawn here from the game's menus. api: { game (hud.js's), invoke, settings() (as the app sent them) }
+  // achievements drawn here from the game's menus. api: { game (hud.js's), invoke, settings() (as the app sent them),
+  // fresh() (when hud.js last fetched the menus) }
   function mount(api) {
     const { game } = api, root = document.documentElement, $ = id => document.getElementById(id);
-    const el = (tag, cls, html = '') => { const e = document.createElement(tag); if (cls) e.className = cls; e.innerHTML = html; return e; };
-    const cc = el('div'); cc.id = 'cc';
-    let layout = 0, tab = 'up', sheet = false, menuKey = '', live = null;
+    // an element with its class and children; strings go in as text (the game's names never as markup)
+    const h = (tag, cls, ...kids) => { const e = document.createElement(tag); if (cls) e.className = cls; e.append(...kids.filter(k => typeof k === 'string' || k instanceof Node)); return e; };
+    const button = (cls, ...kids) => { const b = h('button', cls, ...kids); b.type = 'button'; return b; };
+    const cc = h('div'); cc.id = 'cc';
+    let layout = 0, tab = 'up', sheet = false, menuAt = -1, live = null, angelsOn = false;
     const thumbs = {};
     const thumb = id => thumbs[id] || (thumbs[id] = game.thumb(id));
+    // what a click changed comes back with the menus hud.js fetches again: drawn once it's in
+    const redraw = () => { menuAt = -1; tick(); };
+    const later = () => setTimeout(redraw, 120);
 
     // ── the menus, as the page's menu draws them
+    const head = (lead, rest, ...btns) => h('p', 'tree-head', h('span', '', h('b', '', lead), rest), h('span', '', ...btns));
+    const act = (text, fn) => { const b = button('', text); b.addEventListener('click', fn); return b; };
+    function node(cls, col, row, top, name, what, foot, can, fn) {
+      const b = button(cls, h('i', '', top), h('b', '', name), h('span', '', what), h('em', '', foot));
+      b.disabled = !can; b.style.gridColumn = col + 1; b.style.gridRow = row + 2;
+      b.addEventListener('click', fn);
+      return b;
+    }
     function tree(body, tight) {
       const m = game.menu();
       body.className = 'menu-body tree' + (tight ? ' tight' : ''); body.textContent = '';
-      const head = el('p', 'tree-head', `<span><b>${num(m.seeds)}</b> ki seeds${m.seeds || m.spent ? ` · ×${m.boost} on everything` : ' — ascend to earn some'}</span>`);
-      const right = el('span');
-      if (m.spent) { const b = el('button', '', 'reset'); b.type = 'button'; b.addEventListener('click', () => { game.respec(); later(); }); right.append(b); }
-      if (game.angels().gods) { const b = el('button', '', 'angels'); b.type = 'button'; b.addEventListener('click', () => { angelsOn = true; draw(); }); right.append(b); }
-      head.append(right); body.append(head);
-      (m.branches || []).forEach((br, col) => m.tree.filter(n => n.branch === br.name).forEach((n, row) => {
-        const b = el('button', 'node' + (n.can ? ' can' : '') + (n.lvl ? ' on' : '') + (n.open ? '' : ' locked') + (n.tier === 3 ? ' cap' : ''));
-        b.type = 'button'; b.disabled = !n.can;
-        b.innerHTML = `<i>${row ? '' : br.name + ' · ' + br.pts + ' pts'}</i><b>${n.name}</b><span>${n.what}</span><em>${!n.open ? `needs ${n.need} in ${n.branch}` : (n.max === Infinity || n.max === null ? 'lv ' + n.lvl : n.lvl + '/' + n.max) + (n.lvl < n.max ? ' · ' + num(n.cost) + ' seed' + (n.cost > 1 ? 's' : '') : '')}</em>`;
-        b.style.gridColumn = col + 1; b.style.gridRow = row + 2;
-        b.addEventListener('click', () => { game.learn(n.id); later(); });
-        body.append(b);
-      }));
+      body.append(head(num(m.seeds), ` ki seeds${m.seeds || m.spent ? ` · ×${m.boost} on everything` : ' — ascend to earn some'}`,
+        m.spent && act('reset', () => { game.respec(); later(); }), game.angels().gods && act('angels', () => { angelsOn = true; redraw(); })));
+      (m.branches || []).forEach((br, col) => m.tree.filter(n => n.branch === br.name).forEach((n, row) => body.append(node(
+        'node' + (n.can ? ' can' : '') + (n.lvl ? ' on' : '') + (n.open ? '' : ' locked') + (n.tier === 3 ? ' cap' : ''), col, row,
+        row ? '' : `${br.name} · ${br.pts} pts`, n.name, n.what,
+        !n.open ? `needs ${n.need} in ${n.branch}` : (n.max === Infinity || n.max === null ? 'lv ' + n.lvl : n.lvl + '/' + n.max) + (n.lvl < n.max ? ` · ${num(n.cost)} seed${n.cost > 1 ? 's' : ''}` : ''),
+        n.can, () => { game.learn(n.id); later(); }))));
     }
-    let angelsOn = false;
     function angels(body) {
       const an = game.angels();
       body.className = 'menu-body tree angels'; body.textContent = '';
-      const head = el('p', 'tree-head', `<span><b>${num(an.godki)}</b> god ki · ×${an.boost} on everything</span>`), right = el('span');
-      if (an.auto) { const b = el('button', '', 'self-ascend: ' + an.auto); b.type = 'button'; b.addEventListener('click', () => { game.autoNext(); later(); }); right.append(b); }
-      const back = el('button', '', 'ki tree'); back.type = 'button'; back.addEventListener('click', () => { angelsOn = false; draw(); }); right.append(back);
-      head.append(right); body.append(head);
-      ['whis', 'vados'].forEach((who, col) => an.list.filter(a => a.who === who).forEach((a, row) => {
-        const b = el('button', 'node' + (a.can ? ' can' : '') + (a.on ? ' on' : '') + (a.open ? '' : ' locked') + (a.tier === 2 ? ' cap' : ''));
-        b.type = 'button'; b.disabled = !a.can;
-        b.innerHTML = `<i>${row ? '' : who}</i><b>${a.name}</b><span>${a.what}</span><em>${a.on ? 'learned' : !a.open ? `needs ${a.need} from ${who}` : a.cost + ' god ki'}</em>`;
-        b.style.gridColumn = col + 1; b.style.gridRow = row + 2;
-        b.addEventListener('click', () => { game.learnAngel(a.id); later(); });
-        body.append(b);
-      }));
+      body.append(head(num(an.godki), ` god ki · ×${an.boost} on everything`, an.auto && act('self-ascend: ' + an.auto, () => { game.autoNext(); later(); }), act('ki tree', () => { angelsOn = false; redraw(); })));
+      ['whis', 'vados'].forEach((who, col) => an.list.filter(a => a.who === who).forEach((a, row) => body.append(node(
+        'node' + (a.can ? ' can' : '') + (a.on ? ' on' : '') + (a.open ? '' : ' locked') + (a.tier === 2 ? ' cap' : ''), col, row,
+        row ? '' : who, a.name, a.what, a.on ? 'learned' : !a.open ? `needs ${a.need} from ${who}` : a.cost + ' god ki',
+        a.can, () => { game.learnAngel(a.id); later(); }))));
     }
     function heroes(body, row) {
       body.className = row ? 'carousel' : 'menu-body chars'; body.textContent = '';
       for (const c of game.menu().chars) {
-        const b = el('button', 'char' + (c.on ? ' on' : '') + (c.open ? '' : ' locked')); b.type = 'button';
-        b.append(thumb(c.id)); b.insertAdjacentHTML('beforeend', `<b>${c.name}</b><span>${c.on ? 'playing' : c.open ? 'tap to play' : 'unlock: ' + c.need}</span>`);
+        const b = button('char' + (c.on ? ' on' : '') + (c.open ? '' : ' locked'), thumb(c.id), h('b', '', c.name), h('span', '', c.on ? 'playing' : c.open ? 'tap to play' : 'unlock: ' + c.need));
         if (c.open) b.addEventListener('click', () => { game.pick(c.id); later(); });
         body.append(b);
       }
@@ -253,38 +260,36 @@ html.control.photo #cc { visibility: hidden; }
     function ach(body) {
       body.className = 'menu-body'; body.dataset.icons = 'pills'; body.textContent = '';
       for (const a of game.menu().ach) {
-        const d = el('button', 'ach' + (a.done ? ' done' : ''), `<b>${a.name}</b><span>${a.text}</span>`); d.type = 'button'; d.title = a.text;
+        const d = button('ach' + (a.done ? ' done' : ''), h('b', '', a.name), h('span', '', a.text)); d.title = a.text;
         d.addEventListener('click', () => d.classList.toggle('open'));
         body.append(d);
       }
     }
-    const MENUS = { tree: b => (angelsOn ? angels(b) : tree(b, b.classList.contains('tight') || b.dataset.tight === '1')), heroes: b => heroes(b, b.dataset.row === '1'), ach };
-    // what a click changed comes back with the menus hud.js fetches again: draw once it's in
-    const later = () => setTimeout(() => { menuKey = ''; tick(); }, 120);
+    const MENUS = { tree: b => (angelsOn ? angels(b) : tree(b, b.dataset.tight === '1')), heroes: b => heroes(b, b.dataset.row === '1'), ach };
 
     // ── the parts
     const w = () => document.querySelector('.w');
-    const shop = (...cls) => { const s = $('shop'); s.classList.remove('desc', 'grid2', 'nobulk'); s.classList.add(...cls.filter(Boolean)); return s; };
-    const menuPart = (kind, opts = {}) => { const b = el('div', 'menu-body'); b.dataset.menu = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
-    const heading = (text, key) => el('div', 'lbl', `<span>${text}</span><b data-n="${key}"></b>`);
+    const shop = cls => { const s = $('shop'); s.classList.remove('desc', 'grid2', 'nobulk'); if (cls.length) s.classList.add(...cls); return s; };
+    const menuPart = (kind, opts = {}) => { const b = h('div', 'menu-body'); b.dataset.menu = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
+    const count = key => { const b = h('b'); b.dataset.n = key; return b; };
+    const heading = (text, key) => h('div', 'lbl', h('span', '', text), count(key));
     const NAMES = { up: 'upgrades', tree: 'ki tree', heroes: 'heroes', ach: 'achievements' };
-    function tabs(list, shopCls) {
+    function tabs(list, plan) {
       if (!list.includes(tab)) tab = list[0];
-      const box = el('div', 'card grow'), head = el('div', 'tabs'), pane = el('div', 'pane');
-      for (const k of list) { const b = el('button', k === tab ? 'on' : '', `${NAMES[k]} <b data-n="${k}"></b>`); b.type = 'button'; b.dataset.tab = k; head.append(b); }
-      head.addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; build(); } });
-      pane.append(tab === 'up' ? shop(...shopCls) : menuPart(tab, { tight: false }));
-      box.append(head, pane);
+      const box = h('div', 'card grow'), bar = h('div', 'tabs'), pane = h('div', 'pane');
+      for (const k of list) { const b = button(k === tab ? 'on' : '', NAMES[k] + ' ', count(k)); b.dataset.tab = k; bar.append(b); }
+      bar.addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; build(); } });
+      pane.append(tab === 'up' ? shop(plan.shop || []) : menuPart(tab));
+      box.append(bar, pane);
       return box;
     }
     function liveView() {
-      const box = el('div', 'live', '<canvas></canvas><em>live</em>'), cv = box.firstChild;
-      const buf = document.createElement('canvas');
+      const cv = h('canvas'), box = h('div', 'live', cv, h('em', '', 'live')), buf = h('canvas');
       let busy = false;
       const frame = () => {
         if (busy || document.hidden || !box.isConnected) return; busy = true;
         Promise.all([api.invoke('planet_spot').then(JSON.parse), api.invoke('planet_pixels')]).then(([s, px]) => {
-          if (!px || px.byteLength !== s.w * s.h * 4) return;   // between frames the app sends nothing (control.rs)
+          if (!px || px.byteLength !== s.w * s.h * 4) return;   // too soon, the app sends nothing (control.rs)
           buf.width = s.w; buf.height = s.h; buf.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px), s.w, s.h), 0, 0);
           // the planet and some sky round it, at the box's shape
           const k = cv.clientWidth / Math.max(1, cv.clientHeight), side = Math.min(s.h, Math.max(s.r * 3.2, 40)), wd = Math.min(s.w, side * k);
@@ -293,82 +298,66 @@ html.control.photo #cc { visibility: hidden; }
           x.drawImage(buf, Math.max(0, Math.min(s.w - wd, s.cx - wd / 2)), Math.max(0, Math.min(s.h - side, s.cy - side / 2)), wd, side, 0, 0, cv.width, cv.height);
         }).catch(() => {}).finally(() => { busy = false; });
       };
-      clearInterval(live); live = setInterval(frame, 260); frame();
+      clearInterval(live); live = setInterval(frame, 300); frame();   // the app gives it one every 200 ms at most
       return box;
     }
-    const icon = k => { const b = document.querySelector(`.w [data-w="${k}"] svg`); return b ? b.outerHTML : SVG.more.replace('<svg', '<svg class="ph"'); };
+    // the round button's icon (the skin's, once it's there: tick swaps a placeholder for it)
+    const icon = k => { const b = document.querySelector(`.w [data-w="${k}"] svg`); if (b) return b.cloneNode(true); const t = document.createElement('template'); t.innerHTML = SVG.more; t.content.firstChild.classList.add('ph'); return t.content.firstChild; };
     function deckView() {
-      const box = el('div', 'deck');
-      const rows = [...$('shop').querySelectorAll('[data-buy]')].map(b => ({ key: b.dataset.buy }));
-      for (const t of deck(rows, true)) {
-        const b = el('button', 'tile'); b.type = 'button'; b.dataset.tile = t.kind; if (t.key) b.dataset.key = t.key;
-        if (t.kind === 'kaio') { b.className = 'tile big t-kaio'; b.innerHTML = `${icon('kaio')}<span></span>`; b.addEventListener('click', () => $('kaio').click()); }
-        else if (t.kind === 'itx') { b.className = 'tile big t-itx'; b.innerHTML = `${icon('itx')}<span></span>`; b.addEventListener('click', () => $('itxBtn').click()); }
-        else if (t.kind === 'more') { b.className = 'tile more'; b.innerHTML = '<b data-n="tree"></b><span>ki tree<br>heroes<br>achievements</span>'; b.addEventListener('click', () => { sheet = true; if (tab === 'up') tab = 'tree'; build(); }); }
-        else { b.innerHTML = '<div><b></b><br><i></i></div><em></em>'; b.addEventListener('click', () => { const r = $('shop').querySelector(`[data-buy="${t.key}"]`); if (r && !r.disabled) r.click(); }); }
-        box.append(b);
+      const box = h('div', 'deck');
+      for (const t of deck([...$('shop').querySelectorAll('[data-buy]')].map(b => ({ key: b.dataset.buy })), true)) {
+        let b;
+        if (t.kind === 'kaio') { b = button('tile big t-kaio', icon('kaio'), h('span')); b.addEventListener('click', () => $('kaio').click()); }
+        else if (t.kind === 'itx') { b = button('tile big t-itx', icon('itx'), h('span')); b.addEventListener('click', () => $('itxBtn').click()); }
+        else if (t.kind === 'more') { b = button('tile more', count('tree'), h('span', '', 'ki tree', h('br'), 'heroes', h('br'), 'achievements')); b.addEventListener('click', () => { sheet = true; build(); }); }
+        else { b = button('tile', h('div', '', h('b'), h('br'), h('i')), h('em')); b.dataset.key = t.key; b.addEventListener('click', () => { const r = $('shop').querySelector(`[data-buy="${t.key}"]`); if (r && !r.disabled) r.click(); }); }
+        b.dataset.tile = t.kind; box.append(b);
       }
       return box;
     }
     function bulkTile() {
-      const b = el('button', 'card bulkt', '<span class="lbl">bulk</span><b></b>'); b.type = 'button'; b.dataset.bulk = '1';
+      const b = button('card bulkt', h('span', 'lbl', 'bulk'), h('b')); b.dataset.bulk = '1';
       b.addEventListener('click', () => { const bs = [...$('shop').querySelectorAll('.bulk [data-n]')], i = bs.findIndex(x => x.getAttribute('aria-pressed') === 'true'); if (bs.length) bs[(i + 1) % bs.length].click(); tick(); });
       return b;
     }
-    // the chip and the round buttons stay in .w (its clicks are widget.js's); .w lays out as if they were the column's own
-    function chipRail(col, wrap) {
-      const x = w(); if (!x) return;
-      col.append(x);
-      const chip = x.querySelector('.dw-chip'), rail = x.querySelector('.dw-rail');
-      if (wrap) { if (chip) chip.style.order = 0; if (rail) rail.style.order = 1; }
-    }
+    // each part into its column. The chip and round buttons stay in .w (its clicks are widget.js's), which lays out as if
+    // they were the column's own (display: contents)
+    const PART = {
+      hud: c => { if (w()) c.append(w()); },
+      top: c => { const r = h('div', 'row top'); if (w()) r.append(w()); if (layout === 4) r.append(bulkTile()); c.append(r); },
+      shop: (c, col, plan) => { const box = h('div', col.parts.length === 1 ? 'card pane' : 'card'); if (col.parts.length > 1) box.style.flex = 'none'; box.append(shop(plan.shop || [])); c.append(heading('upgrades', 'up'), box); },
+      tree: (c, col, plan) => { const box = h('div', 'card pane'); box.append(menuPart('tree', { tight: plan.tight })); c.append(heading('ki tree', 'tree'), box); },
+      heroes: c => { const box = h('div', 'card'); box.style.flex = 'none'; box.append(menuPart('heroes', { row: true })); c.append(heading('heroes', 'heroes'), box); },
+      ach: c => { const box = h('div', 'card pane'); box.append(menuPart('ach')); c.append(heading('achievements', 'ach'), box); },
+      live: c => c.append(liveView()),
+      deck: c => c.append(deckView()),
+      toast: c => c.append(h('div', 'toastslot')),   // the panel's toasts show here (#toast is fixed to the foot)
+    };
+    if (PARTS.some(p => !PART[p])) throw new Error('control.js: a part with no builder');
 
     function build() {
       const s = api.settings() || {};
       layout = pick(s.control_layout); root.dataset.cc = layout; cc.dataset.l = layout;
-      const keep = [w(), $('shop')];
+      const plan = PLAN[layout], keep = [w(), $('shop')];
       clearInterval(live); live = null;
       cc.textContent = '';
       for (const k of keep) if (k && !k.isConnected) document.body.append(k);   // parked until placed
-      const col = (...kids) => { const c = el('div', 'col'); c.append(...kids.filter(Boolean)); return c; };
-      if (layout === 1) {
-        const c = col(); chipRail(c); c.append(tabs(['up', 'tree', 'heroes', 'ach'], ['desc'])); cc.append(c);
-      } else if (layout === 2) {
-        const top = el('div', 'row top'), c = col(top);
-        top.append(w());
-        const sh = el('div', 'card'); sh.style.flex = 'none'; sh.append(shop('grid2', 'nobulk'));
-        const tr = el('div', 'card pane'), th = el('div', 'card'); th.style.flex = 'none';
-        tr.append(menuPart('tree', { tight: true })); th.append(menuPart('heroes', { row: true }));
-        c.append(heading('upgrades', 'up'), sh, heading('ki tree', 'tree'), tr, heading('heroes', 'heroes'), th, el('div', 'toastslot'));   // its toasts show here
+      for (const col of plan.cols) {
+        const c = h('div', 'col');
+        if (col.w) c.style.flex = `0 0 ${col.w}px`;
+        for (const p of col.parts) if (p.startsWith('tabs:')) c.append(tabs(p.slice(5).split(','), plan)); else PART[p](c, col, plan);
         cc.append(c);
-      } else if (layout === 3) {
-        const left = col(liveView()); left.style.flex = '0 0 280px'; chipRail(left);
-        cc.append(left, col(tabs(['up', 'tree', 'heroes', 'ach'], ['grid2'])));
-      } else if (layout === 4) {
-        const top = el('div', 'row top'); top.append(w(), bulkTile());
-        cc.append(col(top, deckView()));
-        if (sheet) {
-          const sh = el('div', 'card sheet'), t = tabs(['tree', 'heroes', 'ach'], []), x = el('button', 'x', '×');
-          x.type = 'button'; x.setAttribute('aria-label', 'close'); x.addEventListener('click', () => { sheet = false; build(); });
-          t.querySelector('.tabs').append(x); t.classList.remove('card'); sh.append(t); cc.append(sh);
-        }
-        $('shop').classList.remove('desc', 'grid2'); document.body.append($('shop'));   // read by the tiles, not shown
-        $('shop').style.display = 'none';
-      } else {
-        const c1 = col(); c1.style.flex = '0 0 250px'; chipRail(c1);
-        const he = el('div', 'card'); he.style.flex = 'none'; he.append(menuPart('heroes', { row: true }));
-        const ac = el('div', 'card pane'); ac.append(menuPart('ach'));
-        c1.append(heading('heroes', 'heroes'), he, heading('achievements', 'ach'), ac);
-        const up = el('div', 'card pane'); up.append(shop());
-        const c2 = col(heading('upgrades', 'up'), up); c2.style.flex = '0 0 260px';
-        const tr = el('div', 'card pane'); tr.append(menuPart('tree', { tight: true }));
-        cc.append(c1, c2, col(heading('ki tree', 'tree'), tr));
       }
-      if (layout !== 4) $('shop').style.display = '';
-      deckKeys = shopKeys(); menuKey = ''; tick();
+      if (sheet && plan.more) {
+        const sh = h('div', 'card sheet'), t = tabs(plan.more, plan), x = button('x', '×');
+        x.setAttribute('aria-label', 'close'); x.addEventListener('click', () => { sheet = false; build(); });
+        t.querySelector('.tabs').append(x); t.classList.remove('card'); sh.append(t); cc.append(sh);
+      }
+      $('shop').style.display = $('shop').closest('#cc') ? '' : 'none';   // not placed: read by the deck, not shown
+      deckKeys = shopKeys(); menuAt = -1; tick();
     }
 
-    // ── kept up to date: the badges, the menus when they change, the deck's tiles, the sound button
+    // ── kept up to date: the badges, the menus when hud.js has new ones, the deck's tiles, the sound button
     // a name too long for its tile gets smaller, whole words kept, rather than clipped or broken
     const fit = e => { e.style.fontSize = ''; for (let px = parseFloat(getComputedStyle(e).fontSize); e.scrollWidth > e.clientWidth && px > 7; ) e.style.fontSize = (px -= .5) + 'px'; };
     addEventListener('resize', () => cc.querySelectorAll('.tile b, .tile.big span').forEach(fit));
@@ -378,14 +367,13 @@ html.control.photo #cc { visibility: hidden; }
       if (document.hidden || !layout) return;
       if (layout === 4 && shopKeys() !== deckKeys) return build();   // the deck has a tile for every upgrade there is
       const chip = cc.querySelector('.dw-chip'); if (chip) chip.classList.toggle('sm', layout !== 1);
-      const m = game.menu(), an = game.angels(), n = counts(m, $('shopCount') ? +$('shopCount').textContent || 0 : 0);
+      const m = game.menu(), n = counts(m, $('shopCount') ? +$('shopCount').textContent || 0 : 0);
       for (const b of cc.querySelectorAll('b[data-n]')) {
         const k = b.dataset.n, v = n[k];
         const t = !b.closest('.lbl') || !v ? v : k === 'up' ? v + ' to buy' : k === 'tree' ? v + ' to learn' : v;
         if (b.textContent !== String(t)) b.textContent = t;
       }
-      const key = JSON.stringify([m, an, angelsOn]);
-      if (key !== menuKey) { menuKey = key; for (const b of cc.querySelectorAll('[data-menu]')) MENUS[b.dataset.menu](b); }
+      if (api.fresh() !== menuAt) { menuAt = api.fresh(); for (const b of cc.querySelectorAll('[data-menu]')) MENUS[b.dataset.menu](b); }
       // the deck: the upgrades as the list shows them, and the boosts as their round buttons
       for (const t of cc.querySelectorAll('.tile[data-key]')) {
         const r = $('shop').querySelector(`[data-buy="${t.dataset.key}"]`); if (!r) continue;
@@ -399,7 +387,7 @@ html.control.photo #cc { visibility: hidden; }
       for (const [k, id] of [['kaio', 'kaio'], ['itx', 'itxBtn']]) {
         const t = cc.querySelector(`.t-${k}`), src = $(id), round = document.querySelector(`.w [data-w="${k}"]`); if (!t || !src) continue;
         t.hidden = src.hidden; t.disabled = src.disabled;
-        const ph = t.querySelector('svg.ph'); if (ph && round) ph.outerHTML = round.querySelector('svg').outerHTML;   // the skin's icons came in after the deck
+        const ph = t.querySelector('svg.ph'); if (ph && round) ph.replaceWith(round.querySelector('svg').cloneNode(true));   // the skin's icons came in after the deck
         const name = CONTROL.label(src.title || src.getAttribute('aria-label'), src.firstChild && src.firstChild.textContent);
         const sp = t.querySelector('span'), left = src.querySelector('small');
         const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) { sp.textContent = text; fit(sp); }
@@ -417,16 +405,18 @@ html.control.photo #cc { visibility: hidden; }
       e.preventDefault(); e.stopImmediatePropagation();
       const s = api.settings(); api.invoke('set_sound', { on: !(s && s.sound === true) }).catch(() => {});
     }, true);
+    for (const t of ['pointermove', 'pointerdown', 'keydown']) addEventListener(t, () => { usedAt = performance.now(); }, { passive: true, capture: true });
 
     document.body.append(cc);
-    // widget.js builds .w once the page's script has run: then it's laid out
+    // widget.js builds .w once the page's script has run: then it's laid out. Kept up four times a second while it's
+    // used, once a second otherwise
     setTimeout(build);
-    setInterval(tick, 250);
+    (function again() { tick(); setTimeout(again, active() ? 250 : 1000); })();
     document.addEventListener('visibilitychange', tick);
     // a new layout picked: laid out again
-    return { layout: n => { if (pick(n) !== layout) build(); }, scene: () => (layout === 3 ? cc.querySelector('.live canvas') : null) };
+    return { layout: n => { if (pick(n) !== layout) build(); } };
   }
 
-  return { LAYOUTS, pick, role, shows, lens, toastsOnPanel, PLAN, parts, deck, label, counts, CSS, mount };
+  return { LAYOUTS, pick, role, shows, lens, toastsOnPanel, PLAN, PARTS, TABS, parts, active, deck, label, counts, CSS, mount };
 })();
 if (typeof module === 'object' && module.exports) module.exports = CONTROL;

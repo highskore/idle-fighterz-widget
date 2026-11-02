@@ -905,8 +905,12 @@ pub fn planet_spot(core: State<'_, Core>) -> Result<String, String> {
     })
 }
 
+/// The share card's numbers; from the control centre, its next planet_pixels is then the card's picture (control::feed_ok)
 #[tauri::command]
-pub fn planet_card(core: State<'_, Core>) -> Result<String, String> {
+pub fn planet_card<R: tauri::Runtime>(webview: tauri::Webview<R>, core: State<'_, Core>) -> Result<String, String> {
+    if webview.label() == crate::control::LABEL {
+        crate::control::carded(webview.app_handle());
+    }
     core.with(|b| b.game.card_json())
 }
 

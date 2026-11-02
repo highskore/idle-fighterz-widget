@@ -9,7 +9,7 @@ use std::{
         Mutex,
     },
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 #[derive(Default)]
 pub struct Photo {
@@ -63,7 +63,7 @@ pub fn enter(app: &AppHandle) {
     }
     core.pause(true);
     *photo.told.lock().unwrap() = None;
-    let _ = app.emit("photo", true);
+    crate::to_hud(app, "photo", true.into());
     app.state::<Shown>().poke(); // ghost mode lets go of the clicks, so a click can end it
     if let Some(w) = app.get_webview_window("main") {
         if !app.state::<Shown>().get() {
@@ -97,7 +97,7 @@ pub fn exit(app: &AppHandle) {
         return;
     }
     core.pause(false);
-    let _ = app.emit("photo", false);
+    crate::to_hud(app, "photo", false.into());
     app.state::<Shown>().poke();
     crate::smoke("photo: off");
     if let Some(text) = told.take() {

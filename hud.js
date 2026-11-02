@@ -68,7 +68,7 @@ GAMES.push({
     };
     if (!panel) {
       st.el.addEventListener('pointerenter', mask); st.el.addEventListener('pointermove', mask);
-      tauri.event.listen('pointer', ({ payload }) => { if (payload.inside) mask(); });   // another app active: no pointer moves
+      tauri.event.listen('pointer', ({ payload }) => { if (payload.inside && payload.x >= 0) mask(); });   // another app active: no pointer moves (x -1: over the control centre)
     }
 
     // how the page shows it: floating or window mode, the clouds widget.js picks (they come and go with the pointer),
@@ -111,7 +111,9 @@ GAMES.push({
     tauri.event.listen('planet', ({ payload }) => {
       const m = JSON.parse(payload);
       if (m.px) { if (native) show(); else pixels(); }   // while the layer has them: stale, or the layer failed; ask the app
-      const stale = m.shop || m.cues.length || 'world' in m || (m.hud && performance.now() - fresh >= 1000);
+      // the panel fetches them at most once a second while it's used, every 5 s otherwise (a cue or a new world at once)
+      const since = performance.now() - fresh, every = panel ? (CONTROL.active() ? 1000 : 5000) : 1000;
+      const stale = m.cues.length || 'world' in m || (panel ? (m.shop || m.hud) && since >= every : m.shop || (m.hud && since >= every));
       queue = queue.then(() => (stale ? refresh() : null)).then(() => deliver(m)).catch(e => console.error(e));
     });
     // n: how many (shift-click 10, alt-click 0 for max); a plain click is one buy
@@ -215,7 +217,10 @@ GAMES.push({
     let cardSpr = { w: 0, h: 0, col: [] };
     const forCard = () => {
       call('sprite', {}).then(s => { cardSpr = JSON.parse(s); }).catch(e => console.error(e));
-      if (native && !panel) call('pixels').then(b => { if (b.byteLength !== st.W * st.H * 4) return; scene.width = st.W; scene.height = st.H; scene.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(b), st.W, st.H), 0, 0); }).catch(e => console.error(e));
+      const put = (b, w, h) => { if (b.byteLength !== w * h * 4) return; scene.width = w; scene.height = h; scene.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(b), w, h), 0, 0); };
+      if (native && !panel) call('pixels').then(b => put(b, st.W, st.H)).catch(e => console.error(e));
+      // the panel draws no planet: the app gives it the game's frame once, after it asks for the card (control.rs)
+      if (panel) call('card').then(() => Promise.all([call('spot').then(JSON.parse), call('pixels')])).then(([s, b]) => put(b, s.w, s.h)).catch(e => console.error(e));
     };
     addEventListener('pointerdown', e => { if (e.target.closest?.('#share, #shareM, [data-w="share"]')) forCard(); }, true);
     forCard();
@@ -228,7 +233,7 @@ GAMES.push({
     const g = {
       native: true,
       menu: () => view.menu, angels: () => view.angels, ascendInfo: () => view.ascend_info, godInfo: () => view.god_info, zenoInfo: () => view.zeno_info,
-      card: () => Object.assign({}, view.card, { spr: cardSpr, scene: panel ? (ccUi && ccUi.scene()) || st.cv : native ? scene : st.cv }),
+      card: () => Object.assign({}, view.card, { spr: cardSpr, scene: native || panel ? scene : st.cv }),
       frame: () => {},
       learn: id => { call('learn', { id }); rerender(); },
       respec: () => { call('respec'); rerender(); },
@@ -246,7 +251,11 @@ GAMES.push({
       resize,
       relayout,
     };
-    if (panel) ccUi = CONTROL.mount({ game: g, invoke: CC.invoke, settings: CC.settings });
+    if (panel) {
+      ccUi = CONTROL.mount({ game: g, invoke: CC.invoke, settings: CC.settings, fresh: () => fresh });
+      // the app sent nothing while it was hidden: everything again once it's back
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) call('resend'); });
+    }
     return g;
   },
 });

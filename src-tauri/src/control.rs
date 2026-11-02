@@ -15,15 +15,43 @@ use tauri::{AppHandle, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow, Web
 
 pub const LABEL: &str = "control";
 
-/// the live planet in layout 3 fetches frames at most this often
-const FEED_EVERY: Duration = Duration::from_millis(250);
+/// the live planet in layout 3 fetches frames at most this often (the page asks every 300 ms)
+const FEED_EVERY: Duration = Duration::from_millis(200);
+/// the share card's one frame: the pixels asked for this soon after the card
+const CARD_FRAME: Duration = Duration::from_secs(3);
+/// the frame is saved once the window has stopped moving this long
+const SETTLE: Duration = Duration::from_millis(800);
+
+type Frame = (f64, f64, f64, f64);
 
 #[derive(Default)]
 pub struct Control {
-    layout: AtomicU64,     // the layout the open window was sized for
-    making: AtomicBool,    // a window is being made (off the calling thread)
-    feed: AtomicBool,      // layout 3: it may fetch frames
+    layout: AtomicU64,  // the layout the open window was sized for
+    making: AtomicBool, // a window is being made (off the calling thread)
+    feed: AtomicBool,   // layout 3: it may fetch frames
     fed: Mutex<Option<Instant>>,
+    card: Mutex<Option<Instant>>,  // the share card asked for its frame
+    moved: Mutex<Option<Instant>>, // the last move or resize, saved once it settles
+    away: Mutex<Option<Frame>>,    // where it was on a display that went away, to go back to
+}
+
+/// what the window needs: `want` it (control on, fullscreen, the widget showing), whether one is open or being made,
+/// and whether its layout changed
+#[derive(Debug, PartialEq)]
+pub enum Step {
+    Open,
+    Close,
+    Resize,
+    Stay,
+}
+
+pub fn step(want: bool, open: bool, making: bool, relayout: bool) -> Step {
+    match (want, open) {
+        (true, false) if !making => Step::Open,
+        (false, true) => Step::Close,
+        (true, true) if relayout => Step::Resize,
+        _ => Step::Stay,
+    }
 }
 
 /// Opens, resizes or closes the window to match the settings: open while control is on in fullscreen and the widget shows
@@ -32,39 +60,59 @@ pub fn sync(app: &AppHandle, s: &Value, shown: bool) {
     let want = crate::control_on(app, s) && shown;
     let layout = s["control_layout"].as_u64().unwrap_or(1);
     c.feed.store(want && layout == 3, Relaxed);
-    match app.get_webview_window(LABEL) {
-        Some(w) if !want => {
+    let w = app.get_webview_window(LABEL);
+    match step(want, w.is_some(), c.making.load(Relaxed), c.layout.load(Relaxed) != layout) {
+        Step::Close => {
             keep_frame(app);
-            let _ = w.destroy();
+            if let Some(w) = w {
+                let _ = w.destroy();
+            }
         }
-        Some(w) => {
-            if c.layout.swap(layout, Relaxed) != layout {
+        Step::Resize => {
+            c.layout.store(layout, Relaxed);
+            if let Some(w) = w {
                 resize(&w, layout);
             }
         }
-        // made off this thread: a sync command (set_settings) that makes a window deadlocks on Windows
-        None if want && !c.making.swap(true, Relaxed) => {
+        // made off this thread: a sync command (set_settings) that makes a window deadlocks on Windows. The settings
+        // may change while it's made: once it's there, it's matched to them again (closed, if they no longer want it)
+        Step::Open if !c.making.swap(true, Relaxed) => {
             let app = app.clone();
             std::thread::spawn(move || {
-                if let Err(e) = open(&app) {
-                    eprintln!("control centre: no window ({e})");
-                }
+                let made = open(&app);
                 app.state::<Control>().making.store(false, Relaxed);
+                if let Err(e) = made {
+                    eprintln!("control centre: no window ({e})");
+                    crate::control_lost(&app);
+                    return;
+                }
+                let s = app.state::<crate::State>().settings.lock().unwrap().clone();
+                sync(&app, &s, app.state::<crate::Shown>().get());
             });
         }
-        None => {}
+        _ => {}
     }
 }
 
-/// planet_pixels from the control window: only for layout 3's live planet, and at most every FEED_EVERY
+/// planet_pixels from the control window: layout 3's live planet, at most every FEED_EVERY; or the share card's one frame
 pub fn feed_ok<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(c) = app.try_state::<Control>() else { return false };
+    if c.card.lock().unwrap().take().is_some_and(|t| t.elapsed() < CARD_FRAME) {
+        return true;
+    }
     let mut fed = c.fed.lock().unwrap();
     if !c.feed.load(Relaxed) || fed.is_some_and(|t| t.elapsed() < FEED_EVERY) {
         return false;
     }
     *fed = Some(Instant::now());
     true
+}
+
+/// the control window drew the share card: its next planet_pixels is the card's picture
+pub fn carded<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(c) = app.try_state::<Control>() {
+        *c.card.lock().unwrap() = Some(Instant::now());
+    }
 }
 
 /// the window's size in points for a layout (prefs::CONTROL_LAYOUTS): tall, wide, or wider for three columns
@@ -129,9 +177,6 @@ fn open(app: &AppHandle) -> tauri::Result<()> {
     let monitors = main.as_ref().and_then(|m| m.available_monitors().ok()).unwrap_or_default();
     let game = main.as_ref().and_then(|m| m.current_monitor().ok().flatten());
     let gi = game.as_ref().and_then(|g| monitors.iter().position(|m| m.name() == g.name() && m.position() == g.position()));
-    if let Some(name) = game.as_ref().and_then(|g| g.name()) {
-        crate::remember(app, json!({ "game_display": name }));
-    }
     let areas: Vec<_> = monitors.iter().map(area).collect();
     let scales: Vec<_> = monitors.iter().map(|m| m.scale_factor()).collect();
     let (min_w, min_h) = control_min(layout);
@@ -202,10 +247,11 @@ fn frame<R: Runtime>(w: &WebviewWindow<R>) -> Option<(f64, f64, f64, f64)> {
     Some((p.x as f64 / k, p.y as f64 / k, s.width as f64 / k, s.height as f64 / k))
 }
 
-/// The window's frame, into the settings (saved with them, and when it closes): it opens there next time
+/// The window's frame, into the settings: it opens there next time. While it's away from its display, the frame it had there
 pub fn keep_frame(app: &AppHandle) {
     let (Some(w), Some(c)) = (app.get_webview_window(LABEL), app.try_state::<Control>()) else { return };
-    if let Some((x, y, width, height)) = frame(&w) {
+    let away = *c.away.lock().unwrap();
+    if let Some((x, y, width, height)) = away.or_else(|| frame(&w)) {
         let f = json!({ "x": x.round(), "y": y.round(), "w": width.round(), "h": height.round(), "layout": c.layout.load(Relaxed) });
         if prefs::control_frame(&f).is_some() {
             crate::remember(app, json!({ "control_frame": f }));
@@ -213,17 +259,46 @@ pub fn keep_frame(app: &AppHandle) {
     }
 }
 
-/// The displays changed: a window left off every display goes to the middle of the game's
-pub fn rehome(app: &AppHandle) {
-    let (Some(w), Some(main)) = (app.get_webview_window(LABEL), app.get_webview_window("main")) else { return };
-    let (Some((x, y, ..)), Ok(ms)) = (frame(&w), w.available_monitors()) else { return };
-    if ms.iter().any(|m| inside(area(m), x + 40.0, y + 20.0)) {
-        return;
+/// The window moved or was resized: its frame is saved once it settles
+pub fn moved(app: &AppHandle) {
+    let Some(c) = app.try_state::<Control>() else { return };
+    if c.moved.lock().unwrap().replace(Instant::now()).is_some() {
+        return; // a save is already waiting
     }
-    let Some(g) = main.current_monitor().ok().flatten() else { return };
-    let layout = app.state::<Control>().layout.load(Relaxed);
-    if let Some(to) = place(None, layout, &[area(&g)], &[g.scale_factor()], None) {
-        set_frame(&w, to);
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(SETTLE / 2);
+        let c = app.state::<Control>();
+        let mut at = c.moved.lock().unwrap();
+        if at.is_some_and(|t| t.elapsed() >= SETTLE) {
+            *at = None;
+            drop(at);
+            keep_frame(&app);
+            return;
+        }
+    });
+}
+
+/// The displays changed: a window left off every display goes to the middle of the game's, and back to where it was
+/// when that display returns
+pub fn rehome(app: &AppHandle) {
+    let (Some(w), Some(main), Some(c)) = (app.get_webview_window(LABEL), app.get_webview_window("main"), app.try_state::<Control>()) else { return };
+    let (Some(now), Ok(ms)) = (frame(&w), w.available_monitors()) else { return };
+    let on = |(x, y, ..): Frame| ms.iter().any(|m| inside(area(m), x + 40.0, y + 20.0));
+    let mut away = c.away.lock().unwrap();
+    match *away {
+        Some(was) if on(was) => {
+            *away = None;
+            set_frame(&w, was);
+        }
+        _ if !on(now) => {
+            let Some(g) = main.current_monitor().ok().flatten() else { return };
+            away.get_or_insert(now);
+            if let Some(to) = place(None, c.layout.load(Relaxed), &[area(&g)], &[g.scale_factor()], None) {
+                set_frame(&w, to);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -243,6 +318,19 @@ mod tests {
             let ((w, h), (mw, mh)) = (control_size(l), control_min(l));
             assert!(mw <= w && mh <= h, "layout {l} fits its own minimum");
         }
+    }
+
+    // the window follows the settings, and one still being made when they stop wanting it is closed once it's there
+    #[test]
+    fn the_window_follows_the_settings() {
+        assert_eq!(step(true, false, false, false), Step::Open);
+        assert_eq!(step(true, false, true, false), Step::Stay, "already being made");
+        assert_eq!(step(false, true, false, false), Step::Close);
+        assert_eq!(step(false, false, true, false), Step::Stay, "being made: matched again once it's there");
+        assert_eq!(step(false, true, false, true), Step::Close, "made after the settings turned it off");
+        assert_eq!(step(true, true, false, true), Step::Resize);
+        assert_eq!(step(true, true, false, false), Step::Stay);
+        assert_eq!(step(false, false, false, false), Step::Stay);
     }
 
     #[test]

@@ -45,7 +45,7 @@ const DEFAULTS: &str = r#"{
   "quiet": { "on": false, "from": "22:00", "to": "08:00" },
   "ghost": false, "auto_hide": true, "battery_auto": true, "raid_windows": false, "screen_beam": false,
   "follow_focus": true, "snooze_until": 0, "recap": true, "sound": null, "profiles": [], "skin": "classic", "theme": "light",
-  "ki_buttons": "meter", "shortcut": "Alt+Cmd+KeyP", "control": false, "control_layout": 1, "game_display": "", "control_frame": null,
+  "ki_buttons": "meter", "shortcut": "Alt+Cmd+KeyP", "control": false, "control_layout": 1, "control_frame": null,
   "settings_style": "compact", "tray_style": "menu", "onboarded": false
 }"#;
 #[cfg(not(target_os = "macos"))]
@@ -246,17 +246,34 @@ fn control_on(app: &AppHandle, s: &Value) -> bool {
     s["control"] == true && fullscreen_on(s) && control_ok(app)
 }
 
+// an event for the HUD: the game's page and, while it's open, the control centre's
+#[cfg(feature = "rust-core")]
+pub fn to_hud(app: &AppHandle, event: &str, payload: Value) {
+    if app.get_webview_window(control::LABEL).is_some() {
+        let _ = app.emit_to(control::LABEL, event, payload.clone());
+    }
+    let _ = app.emit_to("main", event, payload);
+}
+
 // the app's own news (an update, a photo saved, the away recap) for the game's toasts: the HUD page shows it, or the
 // control centre's when that's where its toasts go
 pub fn notice(app: &AppHandle, text: String) {
     #[cfg(feature = "rust-core")]
-    if app.get_webview_window(control::LABEL).is_some() {
-        let _ = app.emit_to(control::LABEL, "notice", text.clone());
-    }
+    to_hud(app, "notice", Value::String(text));
+    #[cfg(not(feature = "rust-core"))]
     let _ = app.emit_to("main", "notice", text);
 }
 
-// settings the app keeps for itself (the control window's frame, the game's display): saved, with no page told
+// the control centre couldn't open, or went: control goes off, so the HUD is back on the game rather than nowhere
+#[cfg(feature = "rust-core")]
+fn control_lost(app: &AppHandle) {
+    let s = app.state::<State>().settings.lock().unwrap().clone();
+    if control_on(app, &s) {
+        let _ = set_settings(app.clone(), json!({ "control": false }));
+    }
+}
+
+// settings the app keeps for itself (the control window's frame): saved, with no page told
 #[cfg(feature = "rust-core")]
 fn remember(app: &AppHandle, update: Value) {
     let state = app.state::<State>();
@@ -939,6 +956,18 @@ fn main() {
             let app = w.app_handle().clone();
             std::thread::spawn(move || set_settings(app, json!({ "control": false })));
         }
+        // gone while the settings still want it (its web view failed): off, as if closed
+        #[cfg(feature = "rust-core")]
+        (tauri::WindowEvent::Destroyed, control::LABEL) => {
+            let app = w.app_handle().clone();
+            std::thread::spawn(move || {
+                if app.state::<Shown>().get() {
+                    control_lost(&app);
+                }
+            });
+        }
+        #[cfg(feature = "rust-core")]
+        (tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_), control::LABEL) => control::moved(w.app_handle()),
         _ => {}
     });
     app.setup(|app| {
@@ -1093,8 +1122,6 @@ fn wayland(_: &tauri::WebviewWindow) -> bool {
 fn watch_pointer(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last = None;
-        #[cfg(feature = "rust-core")]
-        let mut kept = std::time::Instant::now();
         loop {
             app.state::<Shown>().wait(); // hidden, nothing to hover: no polling at all
             std::thread::sleep(Duration::from_millis(120));
@@ -1107,19 +1134,12 @@ fn watch_pointer(app: AppHandle) {
             // in ghost mode the widget takes no clicks, so it doesn't wake to the pointer either, until ⌥ is held
             let ghosted = app.state::<system::Sys>().ghosted.load(std::sync::atomic::Ordering::Relaxed);
             let inside = !ghosted && x >= 0.0 && y >= 0.0 && x < s.width as f64 / f && y < s.height as f64 / f;
-            // playing from the control centre is being about too: the game keeps its awake frame rate, told again every
-            // 2 s while the panel has the keys and the pointer may be still
+            // the pointer over the control centre is about the game too: it keeps its awake frame rate. At x -1, y -1:
+            // nowhere on the game's own window
             #[cfg(feature = "rust-core")]
-            let inside = match app.get_webview_window(control::LABEL) {
-                Some(cw) if cw.is_focused().unwrap_or(false) => {
-                    if kept.elapsed() >= Duration::from_secs(2) {
-                        kept = std::time::Instant::now();
-                        last = None;
-                    }
-                    true
-                }
-                Some(cw) => inside || hovered(&cw, c),
-                None => inside,
+            let (inside, x, y) = match app.get_webview_window(control::LABEL) {
+                Some(cw) if !inside && hovered(&cw, c) => (true, -1.0, -1.0),
+                _ => (inside, x, y),
             };
             let now = inside.then_some((x.round() as i32, y.round() as i32));
             if now != last {
@@ -1574,7 +1594,7 @@ mod tests {
             "snooze_until" => "snooze",
             "onboarded" => "intro",
             "mode_prev" => "mode",
-            "game_display" | "control_frame" => "control", // the app's own, kept as the control window is used
+            "control_frame" => "control", // the app's own, kept as the control window is moved
             k => k,
         }
         .to_string();
@@ -1655,7 +1675,7 @@ mod tests {
         for cmd in every {
             assert_eq!(call(&control, cmd), allowed.contains(&cmd), "the control centre {} {cmd}", if allowed.contains(&cmd) { "may call" } else { "may not call" });
         }
-        for cmd in ["planet_pointer_down", "planet_resize", "planet_view", "planet_mask", "planet_fps", "planet_start", "set_settings"] {
+        for cmd in ["planet_pointer_down", "planet_resize", "planet_view", "planet_mask", "planet_fps", "planet_start", "set_settings", "plugin:window|set_size", "plugin:window|set_position", "plugin:event|emit_to", "plugin:event|emit", "plugin:webview|create_webview_window"] {
             assert!(!call(&control, cmd), "the control centre may not call {cmd}");
         }
     }

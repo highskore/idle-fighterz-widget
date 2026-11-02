@@ -82,7 +82,7 @@ pub fn known_look(s: &mut Value) {
             s[key] = json!(fallback);
         }
     }
-    for (key, fallback) in [("control", json!(false)), ("control_layout", json!(1)), ("game_display", json!("")), ("control_frame", Value::Null)] {
+    for (key, fallback) in [("control", json!(false)), ("control_layout", json!(1)), ("control_frame", Value::Null)] {
         if s.get(key).is_some_and(|v| !control_ok(key, v)) {
             s[key] = fallback;
         }
@@ -102,13 +102,11 @@ pub fn control_frame(v: &Value) -> Option<(f64, f64, f64, f64, u64)> {
     sane.then_some((x, y, w, h, layout))
 }
 
-// control (on in fullscreen), its layout, the display the game fills (a monitor's name, "" for the widget's own) and the
-// control window's last frame (null before it has one)
+// control (on in fullscreen), its layout and the control window's last frame (null before it has one)
 fn control_ok(key: &str, v: &Value) -> bool {
     match key {
         "control" => v.is_boolean(),
         "control_layout" => v.as_u64().is_some_and(|l| CONTROL_LAYOUTS.contains(&l)),
-        "game_display" => v.as_str().is_some_and(|s| s.chars().count() <= 200),
         "control_frame" => v.is_null() || control_frame(v).is_some(),
         _ => true,
     }
@@ -411,23 +409,22 @@ mod tests {
 
     #[test]
     fn an_unknown_control_setting_is_the_default() {
-        let defaults = json!({ "control": false, "control_layout": 1, "game_display": "", "control_frame": null });
-        let control = |s: &Value| json!({ "control": s["control"], "control_layout": s["control_layout"], "game_display": s["game_display"], "control_frame": s["control_frame"] });
+        let defaults = json!({ "control": false, "control_layout": 1, "control_frame": null });
+        let control = |s: &Value| json!({ "control": s["control"], "control_layout": s["control_layout"], "control_frame": s["control_frame"] });
         for bad in [json!(0), json!(6), json!(2.5), json!(-1), json!({ "x": 1 }), json!([1, 2])] {
-            let mut s = json!({ "control": bad, "control_layout": bad, "game_display": bad, "control_frame": bad });
+            let mut s = json!({ "control": bad, "control_layout": bad, "control_frame": bad });
             known_look(&mut s);
             assert_eq!(control(&s), defaults, "{bad}");
         }
-        let mut s = json!({ "control": "yes", "control_layout": "2", "game_display": "x".repeat(201), "control_frame": "here" });
+        let mut s = json!({ "control": "yes", "control_layout": "2", "control_frame": "here" });
         known_look(&mut s);
         assert_eq!(control(&s), defaults, "strings");
         for layout in CONTROL_LAYOUTS {
             let frame = json!({ "x": -1440, "y": 25, "w": 420, "h": 900, "layout": layout });
-            let kept = json!({ "control": true, "control_layout": layout, "game_display": "DELL U2720Q", "control_frame": frame });
+            let kept = json!({ "control": true, "control_layout": layout, "control_frame": frame });
             let mut s = kept.clone();
             known_look(&mut s);
-            assert_eq!(s["control_layout"], kept["control_layout"]);
-            assert_eq!((&s["control"], &s["game_display"], &s["control_frame"]), (&kept["control"], &kept["game_display"], &kept["control_frame"]), "kept");
+            assert_eq!(control(&s), kept, "kept");
         }
         for frame in [json!({ "x": 0, "y": 0, "w": 50, "h": 900, "layout": 1 }), json!({ "x": 0, "y": 0, "w": 420, "h": 900, "layout": 9 }), json!({ "x": 1e9, "y": 0, "w": 420, "h": 900, "layout": 1 }), json!({ "x": 0, "y": 0, "w": 420, "h": 900 })] {
             assert_eq!(control_frame(&frame), None, "{frame}");
@@ -436,11 +433,11 @@ mod tests {
 
     #[test]
     fn an_update_keeps_only_control_settings_there_are() {
-        let mut p = json!({ "control": "on", "control_layout": 7, "game_display": 3, "control_frame": { "x": 0 }, "size": 300 });
+        let mut p = json!({ "control": "on", "control_layout": 7, "control_frame": { "x": 0 }, "size": 300 });
         vet(&mut p);
         assert_eq!(p, json!({ "size": 300 }));
         for layout in CONTROL_LAYOUTS {
-            let ok = json!({ "control": true, "control_layout": layout, "game_display": "Built-in Retina Display", "control_frame": null });
+            let ok = json!({ "control": true, "control_layout": layout, "control_frame": null });
             let mut p = ok.clone();
             vet(&mut p);
             assert_eq!(p, ok, "kept");
