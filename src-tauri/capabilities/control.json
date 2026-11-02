@@ -1,11 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "control",
-  "description": "the control centre (fullscreen, the HUD in a window of its own): hears settings, the planet's messages and the app's news, reads the menus and where the planet is, buys, learns and picks, sends keys, leaves fullscreen, and opens settings and photo mode. It never draws the planet, points at it, resizes it or sets its frame rate; the only frame it may read is the share card's, once, just after the card (control.rs)",
+  "description": "the control centre (fullscreen, the HUD in a window of its own): hears settings, the planet's messages and the app's news, reads the menus and where the planet is, buys, learns and picks, sends keys, leaves fullscreen, and opens settings and photo mode. On Windows its page is its own title bar: it drags, resizes, minimises and closes the window. It never draws the planet, points at it, resizes it or sets its frame rate; the only frame it may read is the share card's, once, just after the card (control.rs)",
   "windows": ["control"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
     "allow-get-settings",
     "allow-open-settings",
     "allow-set-sound",

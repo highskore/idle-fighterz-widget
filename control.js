@@ -178,7 +178,7 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc .tile.no em { color: var(--muted); }
 #cc .tile.big { grid-row: span 2; align-items: center; justify-content: center; gap: 8px; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; color: #fff; border: 0; }
 #cc .tile.big svg { width: 34px; height: 34px; }
-#cc .tile.t-kaio { background: linear-gradient(to top, var(--kc, #e0332b) var(--f, 100%), var(--kp, rgba(224,51,43,.35)) var(--f, 100%)); }
+#cc .tile.t-kaio { color: var(--ki, #fff); background: linear-gradient(to top, var(--kc, #e0332b) var(--f, 100%), var(--kp, rgba(224,51,43,.35)) var(--f, 100%)); }
 #cc .tile.t-itx { grid-row: auto; background: linear-gradient(to top, var(--kc, #1f3a57) var(--f, 100%), var(--kp, rgba(31,58,87,.45)) var(--f, 100%)); color: #cfe0f2; font-size: 10px; }
 #cc .tile.t-itx svg { width: 26px; height: 26px; }
 #cc .tile.big:disabled { opacity: .8; }
@@ -196,6 +196,23 @@ html.control #game .toast.on { transform: translate(-50%, 0); }
 #cc[data-l="2"] .top .dw-chip { flex-direction: column; align-items: stretch; gap: 5px; } #cc[data-l="2"] .top .dw-chip > i { flex: none; }
 #cc .dw-chip.sm .dw-n { font-size: 26px; }
 html.control.photo #cc { visibility: hidden; }
+/* Windows: the window has no title bar (control.rs). A thin one of ours slides down while the pointer is near the top
+   (Zen's compact mode): it drags the window, and minimises and closes it. Thin margins at the edges resize it */
+.cc-bar, .cc-edge { display: none; }
+html.frameless .cc-bar { position: fixed; left: 0; right: 0; top: 0; z-index: 60; display: flex; align-items: center; justify-content: center; height: 30px; color: var(--muted); background: var(--cc-bg); border-bottom: 1px solid var(--line); box-shadow: 0 2px 10px rgba(0,0,0,.18); transform: translateY(-100%); opacity: 0; transition: transform .18s ease-out, opacity .18s; }
+html.frameless .cc-bar.on { transform: none; opacity: 1; }
+.cc-bar span { font-size: 11px; text-transform: lowercase; letter-spacing: .02em; pointer-events: none; }
+.cc-bar button { position: absolute; top: 4px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: var(--muted); background: none; border: 0; border-radius: 50%; cursor: pointer; }
+.cc-bar button:hover { color: var(--ink); background: var(--row); }
+.cc-bar button svg { width: 12px; height: 12px; }
+.cc-bar .x { right: 8px; } .cc-bar .min { right: 34px; }
+html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
+.cc-edge[data-dir^="North"] { top: 0; height: 5px; } .cc-edge[data-dir^="South"] { bottom: 0; height: 5px; }
+.cc-edge[data-dir="North"], .cc-edge[data-dir="South"] { left: 10px; right: 10px; cursor: ns-resize; }
+.cc-edge[data-dir="East"], .cc-edge[data-dir="West"] { top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+.cc-edge[data-dir$="East"] { right: 0; } .cc-edge[data-dir$="West"] { left: 0; }
+.cc-edge[data-dir$="East"]:not([data-dir="East"]), .cc-edge[data-dir$="West"]:not([data-dir="West"]) { width: 10px; height: 10px; }
+.cc-edge[data-dir="NorthWest"], .cc-edge[data-dir="SouthEast"] { cursor: nwse-resize; } .cc-edge[data-dir="NorthEast"], .cc-edge[data-dir="SouthWest"] { cursor: nesw-resize; }
 `;
 
   const SVG = {
@@ -268,7 +285,8 @@ html.control.photo #cc { visibility: hidden; }
     // ── the parts
     const w = () => document.querySelector('.w');
     const shop = cls => { const s = $('shop'); s.classList.remove('desc', 'grid2', 'nobulk'); if (cls.length) s.classList.add(...cls); return s; };
-    const menuPart = (kind, opts = {}) => { const b = h('div', 'menu-body'); b.dataset.menu = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
+    // data-part, not data-menu: the page opens its own achievements menu on any click inside a [data-menu]
+    const menuPart = (kind, opts = {}) => { const b = h('div', 'menu-body'); b.dataset.part = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
     const count = key => { const b = h('b'); b.dataset.n = key; return b; };
     const heading = (text, key) => h('div', 'lbl', h('span', '', text), count(key));
     const NAMES = { up: 'upgrades', tree: 'ki tree', heroes: 'heroes', ach: 'achievements' };
@@ -352,7 +370,7 @@ html.control.photo #cc { visibility: hidden; }
         const t = !b.closest('.lbl') || !v ? v : k === 'up' ? v + ' to buy' : k === 'tree' ? v + ' to learn' : v;
         if (b.textContent !== String(t)) b.textContent = t;
       }
-      if (api.fresh() !== menuAt) { menuAt = api.fresh(); for (const b of cc.querySelectorAll('[data-menu]')) MENUS[b.dataset.menu](b); }
+      if (api.fresh() !== menuAt) { menuAt = api.fresh(); for (const b of cc.querySelectorAll('[data-part]')) MENUS[b.dataset.part](b); }
       // the deck: the upgrades as the list shows them, and the boosts as their round buttons
       for (const t of cc.querySelectorAll('.tile[data-key]')) {
         const r = $('shop').querySelector(`[data-buy="${t.dataset.key}"]`); if (!r) continue;
@@ -370,7 +388,7 @@ html.control.photo #cc { visibility: hidden; }
         const name = CONTROL.label(src.title || src.getAttribute('aria-label'), src.firstChild && src.firstChild.textContent);
         const sp = t.querySelector('span'), left = src.querySelector('small');
         const text = name + (left ? ' ' + left.textContent : ''); if (sp.textContent !== text) { sp.textContent = text; fit(sp); }
-        if (round) for (const v of ['--f', '--kc', '--kp']) { const x = round.style.getPropertyValue(v) || src.style.getPropertyValue(v); if (x) t.style.setProperty(v, x); else t.style.removeProperty(v); }
+        if (round) for (const v of ['--f', '--kc', '--kp', '--ki']) { const x = round.style.getPropertyValue(v) || src.style.getPropertyValue(v); if (x) t.style.setProperty(v, x); else t.style.removeProperty(v); }
       }
       const bt = cc.querySelector('[data-bulk] b'), on = $('shop').querySelector('.bulk [aria-pressed="true"]');
       if (bt && on) bt.textContent = on.textContent;
@@ -386,14 +404,39 @@ html.control.photo #cc { visibility: hidden; }
     }, true);
     for (const t of ['pointermove', 'pointerdown', 'keydown']) addEventListener(t, () => { usedAt = performance.now(); }, { passive: true, capture: true });
 
+    // ── Windows: the title bar and edges the window doesn't have (control.rs). The bar shows while the pointer is in
+    // the top 12 px or on it, and goes a moment after it leaves
+    function frame() {
+      const win = () => window.__TAURI__.window.getCurrentWindow();
+      const icon = d => `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="${d}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+      const min = button('min'), x = button('x');
+      min.innerHTML = icon('M2 6h8'); min.setAttribute('aria-label', 'minimise'); min.addEventListener('click', () => win().minimize());
+      x.innerHTML = icon('M2 2l8 8M10 2l-8 8'); x.setAttribute('aria-label', 'close'); x.addEventListener('click', () => win().close());   // closing turns it off
+      const bar = h('div', 'cc-bar', h('span', '', 'control centre'), min, x);
+      bar.setAttribute('data-tauri-drag-region', '');
+      document.body.append(bar);
+      for (const dir of ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest', 'SouthEast', 'SouthWest']) {
+        const e = h('div', 'cc-edge'); e.dataset.dir = dir;
+        e.addEventListener('pointerdown', ev => { if (ev.button === 0) { ev.preventDefault(); win().startResizeDragging(dir); } });
+        document.body.append(e);
+      }
+      let off = 0;
+      const show = on => { clearTimeout(off); if (on) bar.classList.add('on'); else off = setTimeout(() => bar.classList.remove('on'), 700); };
+      addEventListener('pointermove', e => { if (root.classList.contains('frameless')) show(e.clientY < 12 || bar.contains(e.target)); }, { passive: true });
+      document.documentElement.addEventListener('mouseleave', () => show(false));
+    }
+
     document.body.append(cc);
+    frame();
     // widget.js builds .w once the page's script has run: then it's laid out. Kept up four times a second while it's
     // used, once a second otherwise
     setTimeout(build);
     (function again() { tick(); setTimeout(again, active() ? 250 : 1000); })();
     document.addEventListener('visibilitychange', tick);
     // a new layout picked: laid out again
-    return { layout: n => { if (pick(n) !== layout) build(); } };
+    // the settings came (or changed): Windows' own title bar, and a new layout laid out again
+    const framed = () => root.classList.toggle('frameless', (api.settings() || {}).os === 'windows');
+    return { layout: n => { framed(); if (pick(n) !== layout) build(); } };
   }
 
   return { LAYOUTS, pick, role, shows, lens, toastsOnPanel, PLAN, PARTS, TABS, parts, active, deck, label, counts, CSS, mount };
