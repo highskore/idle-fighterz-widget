@@ -437,7 +437,6 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
     // Before the frame changes: on Windows the shadow is invisible borders round the frame, measured when it's placed
     let floating = s["mode"] == "floating" && app.state::<State>().transparent;
     let _ = win.set_shadow(!floating && !full);
-    let _ = win.set_resizable(!floating && !full);
     // leaving for the mode it came from, at the size it had, it goes back to the frame it had; otherwise to the preset
     let back = if app.state::<State>().wayland {
         if win.is_fullscreen().unwrap_or(false) != full {
@@ -454,6 +453,7 @@ fn apply(app: &AppHandle, s: &Value, resize: bool) {
         let _ = win.set_size(LogicalSize::new(side, side));
         place::settle(app, false); // a bigger widget near an edge stays on screen
     }
+    let _ = win.set_resizable(!floating && !full);
     let tray = app.state::<State>().tray.lock().unwrap().clone();
     if let Some(t) = tray {
         let _ = t.top.set_checked(on_top);
@@ -1051,17 +1051,27 @@ fn main() {
                     smoke("hid the widget");
                 });
             }
-            // IDLE_FIGHTERZ_SMOKE_FULLSCREEN too (the Windows smoke test): fullscreen 3 s in, and 2 s later whether the window
-            // covers its display exactly
+            // IDLE_FIGHTERZ_SMOKE_FULLSCREEN too (the Windows smoke test): fullscreen 3 s in, 1.5 s later whether the window covers
+            // its display exactly, then back out, and 1.5 s later whether its frame is the one it had
             if std::env::var_os("IDLE_FIGHTERZ_SMOKE_FULLSCREEN").is_some() {
                 let app = app.handle().clone();
                 std::thread::spawn(move || {
+                    let on_main = |f: Box<dyn FnOnce(&AppHandle) + Send>| {
+                        let h = app.clone();
+                        let _ = app.run_on_main_thread(move || f(&h));
+                    };
                     std::thread::sleep(Duration::from_secs(3));
-                    let h = app.clone();
-                    let _ = app.run_on_main_thread(move || drop(set_settings(h, json!({ "mode": "fullscreen" }))));
-                    std::thread::sleep(Duration::from_secs(2));
-                    let h = app.clone();
-                    let _ = app.run_on_main_thread(move || smoke(&place::report(&h)));
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    on_main(Box::new(move |h| {
+                        let _ = tx.send(place::outer(h));
+                        let _ = set_settings(h.clone(), json!({ "mode": "fullscreen" }));
+                    }));
+                    let was = rx.recv().ok().flatten();
+                    std::thread::sleep(Duration::from_millis(1500));
+                    on_main(Box::new(|h| smoke(&place::report(h))));
+                    on_main(Box::new(|h| drop(fullscreen(h.clone(), false))));
+                    std::thread::sleep(Duration::from_millis(1500));
+                    on_main(Box::new(move |h| smoke(&place::report_back(h, was))));
                 });
             }
             Ok(())
