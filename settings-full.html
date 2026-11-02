@@ -166,6 +166,8 @@ input[type="time"], select, .name { font: inherit; padding: 2px 6px; color: var(
     <div class="grid2"><div>
       <datalist id="snaps"><option value="300"></option><option value="400"></option><option value="560"></option></datalist>
       <div class="row" data-s="mode"><span>mode</span><div class="seg" data-seg="mode"><button data-v="floating">floating</button><button data-v="window">window</button><button data-v="fullscreen">fullscreen</button></div></div>
+      <label class="row" data-s="control" id="ccrow"><span>control centre <small>fullscreen: the hud in its own window</small></span><input type="checkbox" data-k="control"></label>
+      <div class="row" data-s="control_layout" id="cclrow"><span>control layout <small id="cclv"></small></span><div class="seg" data-seg="control_layout"><button data-v="1" title="drawer: tabs in a tall window">1</button><button data-v="2" title="sidebar: everything at once">2</button><button data-v="3" title="wide: a live planet beside tabs">3</button><button data-v="4" title="stream deck: big buttons">4</button><button data-v="5" title="mission control: three columns">5</button></div></div>
       <div class="row" data-s="planet_size"><span>planet size <small>window and fullscreen</small></span><div class="seg" data-seg="planet_size"><button data-v="small">small</button><button data-v="medium">medium</button><button data-v="large">large</button><button data-v="huge">huge</button></div></div>
       <div class="row" data-s="hud"><span>hud</span><div class="seg" data-seg="hud"><button data-v="hover">on hover</button><button data-v="always">always</button></div></div>
       <div class="row" data-s="theme"><span>theme <small id="themev"></small></span><div class="seg" data-seg="theme"><button data-v="light">light</button><button data-v="dark">dark</button><button data-v="auto">auto</button></div></div>
@@ -317,6 +319,8 @@ function render(v) {
   $('battv').textContent = s.battery_saving ? 'on now' : '';
   $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through' + (s.wayland ? '' : ', hold ' + (MAC ? '⌥' : 'alt'));
   $('hiderow').hidden = !!s.wayland;
+  const ccl = document.querySelector(`[data-seg="control_layout"] [data-v="${s.control_layout}"]`); $('cclv').textContent = ccl ? ccl.title.split(':')[0] : '';
+  $('ccrow').hidden = $('cclrow').hidden = !s.control_ok;
   const fsb = document.querySelector('[data-seg="mode"] [data-v="fullscreen"]'); fsb.hidden = !s.fullscreen_ok; fsb.title = 'esc leaves it, ' + (MAC ? '⌃⌘F' : 'F11') + ' toggles it';
   // the spectacles need an overlay (macOS, Windows) and the game on the Rust core
   for (const k of ['raid_windows', 'screen_beam']) document.querySelector(`[data-k="${k}"]`).disabled = !s.spectacle_ok;
@@ -406,7 +410,7 @@ checkFocus();
 all('[data-sel]').forEach(e => e.addEventListener('change', () => set({ [e.dataset.sel]: e.value })));
 all('[data-k]').forEach(i => i.addEventListener('change', () => set({ [i.dataset.k]: i.checked })));
 all('[data-n]').forEach(i => i.addEventListener('change', () => { set({ notify: { [i.dataset.n]: i.checked } }); if (i.checked) preview(i.dataset.n); if (i.checked && perm === 'ask') invoke('request_notify_permission'); }));
-all('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.disabled) return; const k = g.dataset.seg; set({ [k]: k === 'fps' ? +b.dataset.v : b.dataset.v }); }));
+all('[data-seg]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.disabled) return; const k = g.dataset.seg; set({ [k]: k === 'fps' || k === 'control_layout' ? +b.dataset.v : b.dataset.v }); }));
 $('camt').addEventListener('input', () => { $('cav').textContent = $('camt').value; set({ cloud_amount: +$('camt').value }); });
 $('opacity').addEventListener('input', () => { $('opv').textContent = $('opacity').value + '%'; set({ opacity: $('opacity').value / 100 }); });
 $('quiet').addEventListener('change', () => set({ quiet: { on: $('quiet').checked } }));

@@ -3,9 +3,8 @@
 // happened is the game before and after, kept in memory for this run only.
 use crate::{planet::Core, Shown, State};
 use planet_core::big::Big;
-use serde_json::Value;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 /// away is this much idle time, in seconds
 pub const AWAY: f64 = 600.0;
@@ -118,7 +117,7 @@ pub fn watch(app: &AppHandle) {
                         let events = happened(&before, after, |i| crate::planet::villain(i).to_string());
                         if let Some(text) = summary(&events, crate::planet::short) {
                             crate::smoke(&format!("recap: {text}"));
-                            let _ = app.emit_to("main", "notice", Value::String(text));
+                            crate::notice(&app, text);
                         }
                     }
                     present = after;

@@ -617,6 +617,10 @@ pub fn run(app: AppHandle, hooks: Hooks) {
                 let elapsed = core.fast_forward((now - last).as_secs_f64(), now_ms());
                 last = now;
                 if let Some(msg) = core.tick(elapsed, now_ms()) {
+                    // the control centre plays the same game: its HUD hears every message too
+                    if app.get_webview_window(crate::control::LABEL).is_some() {
+                        let _ = app.emit_to(crate::control::LABEL, "planet", msg.clone());
+                    }
                     let _ = app.emit_to("main", "planet", msg);
                 }
                 for m in core.moments() {
@@ -718,9 +722,13 @@ pub fn planet_view(core: State<'_, Core>, bare: bool, clouds: String, amount: f6
     })
 }
 
-/// The last frame drawn, RGBA8 (straight alpha, as ImageData holds it), `st.W`×`st.H`.
+/// The last frame drawn, RGBA8 (straight alpha, as ImageData holds it), `st.W`×`st.H`. The control centre gets one only
+/// for layout 3's live planet, a few times a second (control::feed_ok); otherwise nothing.
 #[tauri::command]
-pub fn planet_pixels(core: State<'_, Core>) -> Response {
+pub fn planet_pixels<R: tauri::Runtime>(webview: tauri::Webview<R>, core: State<'_, Core>) -> Response {
+    if webview.label() == crate::control::LABEL && !crate::control::feed_ok(webview.app_handle()) {
+        return Response::new(Vec::new());
+    }
     Response::new(core.paint().painter.rgba().to_vec())
 }
 
