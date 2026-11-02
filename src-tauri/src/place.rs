@@ -196,6 +196,13 @@ pub fn outer_for(to: R, outer: R, client: R) -> R {
     R { x: to.x - (client.x - outer.x), y: to.y - (client.y - outer.y), w: to.w + (outer.w - client.w), h: to.h + (outer.h - client.h) }
 }
 
+/// Where a window crossing to another display first goes: small, in the middle of `to`, wholly on that display
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn landing(to: R) -> R {
+    let (w, h) = (to.w.min(200.0) / 2.0, to.h.min(200.0) / 2.0);
+    R { x: (to.x + to.w / 2.0 - w / 2.0).round(), y: (to.y + to.h / 2.0 - h / 2.0).round(), w: w.round(), h: h.round() }
+}
+
 /// Whether going from `at` to `to` changes display, so (with per-display scales) the window's DPI
 pub fn crosses(at: R, to: R, frames: &[R]) -> bool {
     nearest(at, frames) != nearest(to, frames)
@@ -221,7 +228,7 @@ fn reframe<T: Runtime>(w: &WebviewWindow<T>, at: R, to: R, cross: bool) {
             os::set_frame(w, outer_for(to, R { x: p.x as f64, y: p.y as f64, w: s.width as f64, h: s.height as f64 }, c));
         };
         if cross {
-            place(R { x: to.x + to.w / 2.0 - 100.0, y: to.y + to.h / 2.0 - 100.0, w: 200.0, h: 200.0 });
+            place(landing(to));
         }
         place(to);
     }
@@ -628,5 +635,41 @@ mod tests {
         let (outer, client) = (R { x: 93.0, y: 100.0, w: 614.0, h: 607.0 }, R { x: 100.0, y: 100.0, w: 600.0, h: 600.0 });
         assert_eq!(outer_for(MIDDLE, outer, client), R { x: -7.0, y: 0.0, w: 2574.0, h: 1447.0 });
         assert_eq!(outer_for(RIGHT, client, client), RIGHT, "no borders: the frame is the client area");
+    }
+
+    // the boss's set-up: a 2560×1140 case display at 100% beside 150% and 125% monitors, physical pixels, in the
+    // arrangements Windows allows (below, above with a negative origin, to the side, and turned on its end)
+    #[test]
+    fn a_case_display_beside_scaled_monitors_fills_on_its_own() {
+        let main = R { x: 0.0, y: 0.0, w: 3840.0, h: 2160.0 }; // 4K at 150%
+        let side = R { x: -3200.0, y: 180.0, w: 3200.0, h: 1800.0 }; // 2560×1440 at 125%
+        let layouts = [
+            ("below", R { x: 640.0, y: 2160.0, w: 2560.0, h: 1140.0 }),
+            ("above", R { x: 0.0, y: -1140.0, w: 2560.0, h: 1140.0 }),
+            ("right", R { x: 3840.0, y: 500.0, w: 2560.0, h: 1140.0 }),
+            ("turned", R { x: 3840.0, y: -200.0, w: 1140.0, h: 2560.0 }),
+            ("left of the side", R { x: -5760.0, y: 900.0, w: 2560.0, h: 1140.0 }),
+        ];
+        for (name, case) in layouts {
+            let all = [side, main, case];
+            let on = |r: R, x: f64, y: f64| R { x: r.x + x, y: r.y + y, w: 700.0, h: 500.0 };
+            for (win, want) in [(on(case, 40.0, 40.0), case), (on(main, 300.0, 300.0), main), (on(side, 100.0, 100.0), side), (R { x: case.x - 200.0, y: case.y + 100.0, w: 700.0, h: 500.0 }, case)] {
+                let to = fill(win, &all, &all, false).unwrap();
+                assert_eq!(to, want, "{name}: {win:?}");
+                for other in all.iter().filter(|o| **o != want) {
+                    assert_eq!(to.overlap(other), 0.0, "{name}: the fill spills onto {other:?}");
+                }
+            }
+            // from the 150% main's fill to the case display: another scale, so it goes there small first, wholly on it
+            assert!(crosses(main, case, &all), "{name}");
+            let l = landing(case);
+            assert_eq!(l.overlap(&case), l.w * l.h, "{name}: the landing is on the case display");
+            assert_eq!(fill(l, &all, &all, false), Some(case), "{name}: and fills it");
+            // a DPI change of 1.5 to 1 shrinks the landing by two thirds: still on the case display
+            let shrunk = R { w: (l.w / 1.5).round(), h: (l.h / 1.5).round(), ..l };
+            assert_eq!(fill(shrunk, &all, &all, false), Some(case), "{name}");
+            // and the main's fill grown 1.25× by a DPI change still re-fits to the main
+            assert_eq!(fill(R { w: main.w * 1.25, h: main.h * 1.25, ..main }, &all, &all, false), Some(main), "{name}");
+        }
     }
 }
