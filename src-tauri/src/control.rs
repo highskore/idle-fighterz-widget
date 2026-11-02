@@ -15,8 +15,6 @@ use tauri::{AppHandle, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow, Web
 
 pub const LABEL: &str = "control";
 
-/// the live planet in layout 3 fetches frames at most this often (the page asks every 300 ms)
-const FEED_EVERY: Duration = Duration::from_millis(200);
 /// the share card's one frame: the pixels asked for this soon after the card
 const CARD_FRAME: Duration = Duration::from_secs(3);
 /// the frame is saved once the window has stopped moving this long
@@ -28,8 +26,6 @@ type Frame = (f64, f64, f64, f64);
 pub struct Control {
     layout: AtomicU64,  // the layout the open window was sized for
     making: AtomicBool, // a window is being made (off the calling thread)
-    feed: AtomicBool,   // layout 3: it may fetch frames
-    fed: Mutex<Option<Instant>>,
     card: Mutex<Option<Instant>>,  // the share card asked for its frame
     moved: Mutex<Option<Instant>>, // the last move or resize, saved once it settles
     away: Mutex<Option<Frame>>,    // where it was on a display that went away, to go back to
@@ -59,7 +55,6 @@ pub fn sync(app: &AppHandle, s: &Value, shown: bool) {
     let Some(c) = app.try_state::<Control>() else { return };
     let want = crate::control_on(app, s) && shown;
     let layout = s["control_layout"].as_u64().unwrap_or(1);
-    c.feed.store(want && layout == 3, Relaxed);
     let w = app.get_webview_window(LABEL);
     match step(want, w.is_some(), c.making.load(Relaxed), c.layout.load(Relaxed) != layout) {
         Step::Close => {
@@ -94,18 +89,9 @@ pub fn sync(app: &AppHandle, s: &Value, shown: bool) {
     }
 }
 
-/// planet_pixels from the control window: layout 3's live planet, at most every FEED_EVERY; or the share card's one frame
+/// planet_pixels from the control window: only the share card's one frame, asked for just after the card
 pub fn feed_ok<R: Runtime>(app: &AppHandle<R>) -> bool {
-    let Some(c) = app.try_state::<Control>() else { return false };
-    if c.card.lock().unwrap().take().is_some_and(|t| t.elapsed() < CARD_FRAME) {
-        return true;
-    }
-    let mut fed = c.fed.lock().unwrap();
-    if !c.feed.load(Relaxed) || fed.is_some_and(|t| t.elapsed() < FEED_EVERY) {
-        return false;
-    }
-    *fed = Some(Instant::now());
-    true
+    app.try_state::<Control>().is_some_and(|c| c.card.lock().unwrap().take().is_some_and(|t| t.elapsed() < CARD_FRAME))
 }
 
 /// the control window drew the share card: its next planet_pixels is the card's picture

@@ -726,7 +726,7 @@ pub fn planet_view(core: State<'_, Core>, bare: bool, clouds: String, amount: f6
 }
 
 /// The last frame drawn, RGBA8 (straight alpha, as ImageData holds it), `st.W`×`st.H`. The control centre gets one only
-/// for layout 3's live planet, a few times a second (control::feed_ok); otherwise nothing.
+/// for the share card, just after asking for the card (control::feed_ok); otherwise nothing.
 #[tauri::command]
 pub fn planet_pixels<R: tauri::Runtime>(webview: tauri::Webview<R>, core: State<'_, Core>) -> Response {
     if webview.label() == crate::control::LABEL && !crate::control::feed_ok(webview.app_handle()) {
