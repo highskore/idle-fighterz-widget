@@ -289,7 +289,8 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
     // ── the parts
     const w = () => document.querySelector('.w');
     const shop = cls => { const s = $('shop'); s.classList.remove('desc', 'grid2', 'nobulk'); if (cls.length) s.classList.add(...cls); return s; };
-    const menuPart = (kind, opts = {}) => { const b = h('div', 'menu-body'); b.dataset.menu = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
+    // data-part, not data-menu: the page opens its own achievements menu on any click inside a [data-menu]
+    const menuPart = (kind, opts = {}) => { const b = h('div', 'menu-body'); b.dataset.part = kind; if (opts.tight) b.dataset.tight = '1'; if (opts.row) b.dataset.row = '1'; return b; };
     const count = key => { const b = h('b'); b.dataset.n = key; return b; };
     const heading = (text, key) => h('div', 'lbl', h('span', '', text), count(key));
     const NAMES = { up: 'upgrades', tree: 'ki tree', heroes: 'heroes', ach: 'achievements' };
@@ -393,7 +394,7 @@ html.frameless .cc-edge { position: fixed; z-index: 70; display: block; }
         const t = !b.closest('.lbl') || !v ? v : k === 'up' ? v + ' to buy' : k === 'tree' ? v + ' to learn' : v;
         if (b.textContent !== String(t)) b.textContent = t;
       }
-      if (api.fresh() !== menuAt) { menuAt = api.fresh(); for (const b of cc.querySelectorAll('[data-menu]')) MENUS[b.dataset.menu](b); }
+      if (api.fresh() !== menuAt) { menuAt = api.fresh(); for (const b of cc.querySelectorAll('[data-part]')) MENUS[b.dataset.part](b); }
       // the deck: the upgrades as the list shows them, and the boosts as their round buttons
       for (const t of cc.querySelectorAll('.tile[data-key]')) {
         const r = $('shop').querySelector(`[data-buy="${t.dataset.key}"]`); if (!r) continue;
