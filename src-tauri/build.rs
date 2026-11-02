@@ -2,7 +2,7 @@
 const COMMANDS: &[&str] = &[
     "get_settings", "set_settings", "tray_title", "hide_widget", "open_settings", "quit", "notify", "notify_permission",
     "request_notify_permission", "open_notify_settings", "page_state", "focus_status", "snooze", "save_profile", "delete_profile",
-    "apply_profile", "set_sound", "photo", "photo_exit",
+    "apply_profile", "set_sound", "photo", "photo_exit", "fullscreen", "step_size",
     // the full settings window's preview, and the menu-bar popover's
     "glance", "preview_frame", "tray_action", "hide_popover", "intro_done",
     // the HUD page's (feature rust-core)

@@ -201,7 +201,7 @@ impl Paint {
         if let Some(b) = g.inp.beam.as_ref().filter(|b| b.full && b.t0 != self.seen_beam) {
             self.seen_beam = b.t0;
             let (x, y, dx, dy) = (cx + b.x * kx, cy + b.y * ky, b.dx * kx, b.dy * ky);
-            self.moments.push(Moment::Beam { x, y, dx, dy, kame: g.kame(), ff: b.ff, kaio: b.kaio, ape: b.ape });
+            self.moments.push(Moment::Beam { x, y, dx, dy, kame: matches!(g.s.hero, Hero::Goku | Hero::Gohan | Hero::Krillin | Hero::Goten), ff: b.ff, kaio: b.kaio, ape: b.ape });
         }
     }
 }
@@ -224,6 +224,9 @@ impl Core {
         if let Some(saved) = read_save(&file).filter(|s| loadable(s)) {
             bridge.load(&saved);
         }
+        // centred across in any window: the site's layout puts it at .56 in a wide one, beside its text, and a stretched window
+        // or fullscreen is wide
+        bridge.game.cam.fcx = Some(0.5);
         Core { bridge: Mutex::new(bridge), file, stopped: Mutex::new(false), fps: Mutex::new(0.0), paint: Mutex::default(), surface: OnceLock::new(), saver: OnceLock::new(), paused: Mutex::new(false) }
     }
 
@@ -744,6 +747,11 @@ pub fn planet_sprite(core: State<'_, Core>, id: Option<String>) -> Result<String
                     Hero::Goku => "goku",
                     Hero::Gohan => "gohan",
                     Hero::Trunks => "trunks",
+                    Hero::Piccolo => "piccolo",
+                    Hero::Krillin => "krillin",
+                    Hero::Goten => "goten",
+                    Hero::Tien => "tien",
+                    Hero::A17 => "a17",
                 });
                 let fi = ALL_FORMS.iter().position(|f| f.0 == g.forms[g.s.form].name).unwrap_or(0);
                 if g.b.fuse_until > g.t {
@@ -939,6 +947,17 @@ mod tests {
         assert!(finite(&[0.0, -3.5, 1e300]).is_ok());
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(finite(&[1.0, bad]).is_err(), "{bad}");
+        }
+    }
+
+    // a stretched window or fullscreen is wide: the planet stays centred across, at any scale and world
+    #[test]
+    fn a_wide_window_centres_the_planet() {
+        let (app, w) = app(std::env::temp_dir().join(format!("idle-fighterz-wide-{}.json", std::process::id())));
+        for (cw, ch, scale) in [(378.0, 237.0, 4.0), (384.0, 216.0, 5.0), (688.0, 288.0, 5.0), (512.0, 160.0, 5.0), (200.0, 200.0, 2.0)] {
+            call(&w, "resize", json!({ "w": cw, "h": ch, "scale": scale }));
+            let cx = app.state::<Core>().with(|b| b.game.cam.cx).unwrap();
+            assert_eq!(cx, (cw / 2.0_f64).round(), "{cw}x{ch}");
         }
     }
 
@@ -1328,8 +1347,9 @@ mod tests {
         const WIN_FREE: (u32, u32) = (640, 420);
         // (hook, canvas, frames, clouds: None for window mode, Some("") for none, Some("c2") for shape c amount 2)
         type Case<'a> = (&'a str, (u32, u32), u32, Option<&'a str>);
-        // no #shenron (a storm on Rust since game PR #35) or #raid (boss intro and mechanics since game #51/#52): game.js is frozen
-        let cases: [Case; 25] = [
+        // no #shenron (a storm on Rust since game PR #35), #raid (boss intro and mechanics since game #51/#52) or #lookout (its view
+        // since game #69): game.js is frozen
+        let cases: [Case; 24] = [
             ("", MEDIUM, 200, Some("")),
             ("", MEDIUM, 200, Some("c2")),
             ("", SMALL, 200, Some("c2")),
@@ -1354,7 +1374,6 @@ mod tests {
             ("#snake", WIN_M, 400, None),
             ("#kame", WIN_FREE, 400, None),
             ("#cooler", WIN_M, 600, None),
-            ("#lookout", WIN_L, 400, None),
         ];
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/frame.cjs");
         let tmp = std::env::temp_dir().join(format!("idle-fighterz-frames-{}", std::process::id()));

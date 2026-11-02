@@ -127,6 +127,26 @@ GAMES.push({
     st.cv.addEventListener('pointerup', e => { const { bx, by, id } = ptr(e); call('pointer_up', { bx, by, id }); });
     st.cv.addEventListener('pointercancel', () => call('pointer_cancel'));
     st.cv.addEventListener('contextmenu', e => { if (itxOwn) e.preventDefault(); });   // right-click is instant transmission's once it's owned
+    // fullscreen mode (settings): Esc leaves it for the mode it came from once no panel is open (the page's own Esc closes
+    // the upgrades, the menu, a box or the drawer first), and F11 toggles it (⌃⌘F on macOS, where F11 shows the desktop).
+    // The window fills its display then: square corners, and no dragging it. ⌘/ctrl +, − and 0 step the UI size and ⌥/alt
+    // the planet size (hud-keys.js), kept in the settings. A toast keeps to the bottom (a buff line mustn't give it a top too)
+    const fullCss = document.createElement('style');
+    fullCss.textContent = 'html.full.widget.windowed #game { border: 0; border-radius: 0; } html.full.widget #toast { top: auto; }';
+    document.head.append(fullCss);
+    let full = false, mac = false;
+    const pickMode = s => { full = s.mode_pick === 'fullscreen'; root.classList.toggle('full', full); };
+    tauri.core.invoke('get_settings').then(s => { mac = s.os === 'macos'; pickMode(s); });
+    tauri.event.listen('settings', ({ payload }) => pickMode(payload));
+    const Win = tauri.window.Window, drag = Win?.prototype.startDragging;
+    if (drag) Win.prototype.startDragging = function () { return full ? Promise.resolve() : drag.call(this); };
+    addEventListener('keydown', e => {
+      const a = HudKeys.action(e, mac, full, !!(document.querySelector('#shop.open, .menu:not([hidden])') || root.classList.contains('dw-open')));
+      if (!a) return;
+      e.preventDefault();
+      const done = 'fullscreen' in a ? tauri.core.invoke('fullscreen', { on: a.fullscreen }) : tauri.core.invoke('step_size', a);
+      done.catch(err => console.error('keys', err));
+    }, true);
     addEventListener('keydown', e => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, [contenteditable]')) return;
       const k = e.key.toLowerCase();
