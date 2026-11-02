@@ -127,8 +127,8 @@ GAMES.push({
     st.cv.addEventListener('pointerup', e => { const { bx, by, id } = ptr(e); call('pointer_up', { bx, by, id }); });
     st.cv.addEventListener('pointercancel', () => call('pointer_cancel'));
     st.cv.addEventListener('contextmenu', e => { if (itxOwn) e.preventDefault(); });   // right-click is instant transmission's once it's owned
-    // fullscreen mode (settings): Esc goes back to the mode it came from (unless it's closing the shop first), F11 toggles
-    // it. The window fills the display there, so it isn't dragged
+    // fullscreen mode (settings): Esc goes back to the mode it came from (unless it's closing a panel first: the upgrades,
+    // the ki tree, the drawer or a box), F11 toggles it. The window fills the display there, so it isn't dragged
     let mode = 'floating', leaveTo = 'floating';
     const pickMode = s => { if (s.mode_pick && s.mode_pick !== 'fullscreen') leaveTo = s.mode_pick; mode = s.mode_pick || mode; };
     tauri.core.invoke('get_settings').then(s => { if (s.transparent === false) leaveTo = 'window'; pickMode(s); });
@@ -138,7 +138,9 @@ GAMES.push({
     addEventListener('keydown', e => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const full = mode === 'fullscreen';
-      if (e.key === 'F11' || (e.key === 'Escape' && full && !document.getElementById('shop')?.classList.contains('open'))) {
+      const $ = id => document.getElementById(id) || { hidden: true, classList: { contains: () => false } };
+      const panel = $('shop').classList.contains('open') || !$('menu').hidden || !$('ascBox').hidden || !$('shareBox').hidden || root.classList.contains('dw-open');
+      if (e.key === 'F11' || (e.key === 'Escape' && full && !panel)) {
         e.preventDefault(); tauri.core.invoke('set_settings', { settings: { mode: full ? leaveTo : 'fullscreen' } });
       }
     }, true);
