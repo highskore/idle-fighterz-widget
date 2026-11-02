@@ -316,6 +316,7 @@ function render(v) {
   $('battv').textContent = s.battery_saving ? 'on now' : '';
   $('ghostv').textContent = s.mode === 'window' ? 'floating only' : 'click-through' + (s.wayland ? '' : ', hold ' + (MAC ? '⌥' : 'alt'));
   $('hiderow').hidden = !!s.wayland;
+  const fsb = document.querySelector('[data-seg="mode"] [data-v="fullscreen"]'); fsb.hidden = !s.fullscreen_ok; fsb.title = 'esc leaves it, ' + (MAC ? '⌃⌘F' : 'F11') + ' toggles it';
   // the spectacles need an overlay (macOS, Windows) and the game on the Rust core
   for (const k of ['raid_windows', 'screen_beam']) document.querySelector(`[data-k="${k}"]`).disabled = !s.spectacle_ok;
   if (!s.spectacle_ok) $('spnote').textContent = 'not on this system yet.';

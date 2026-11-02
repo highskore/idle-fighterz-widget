@@ -62,15 +62,20 @@ pub fn snap(win: R, area: R, reach: f64, margin: f64) -> (f64, f64) {
     (axis(win.x, win.w, area.x, area.right(), reach, margin), axis(win.y, win.h, area.y, area.bottom(), reach, margin))
 }
 
-/// The display `win` is mostly on (or the nearest, if it's on none), then `win` moved the least to be wholly on it.
-pub fn clamp(win: R, areas: &[R]) -> Option<(f64, f64)> {
+/// The display `win` is mostly on, or the nearest if it's on none.
+pub fn nearest(win: R, areas: &[R]) -> Option<usize> {
     let centre = (win.x + win.w / 2.0, win.y + win.h / 2.0);
     let dist = |a: &R| {
         let dx = (a.x - centre.0).max(centre.0 - a.right()).max(0.0);
         let dy = (a.y - centre.1).max(centre.1 - a.bottom()).max(0.0);
         dx * dx + dy * dy
     };
-    let area = areas.iter().max_by(|a, b| win.overlap(a).total_cmp(&win.overlap(b)).then(dist(b).total_cmp(&dist(a))))?;
+    areas.iter().enumerate().max_by(|(_, a), (_, b)| win.overlap(a).total_cmp(&win.overlap(b)).then(dist(b).total_cmp(&dist(a)))).map(|(i, _)| i)
+}
+
+/// The display `win` is mostly on (or the nearest, if it's on none), then `win` moved the least to be wholly on it.
+pub fn clamp(win: R, areas: &[R]) -> Option<(f64, f64)> {
+    let area = areas[nearest(win, areas)?];
     let fit = |pos: f64, len: f64, lo: f64, hi: f64| if len >= hi - lo { lo + ((hi - lo) - len) / 2.0 } else { pos.clamp(lo, hi - len) };
     Some((fit(win.x, win.w, area.x, area.right()), fit(win.y, win.h, area.y, area.bottom())))
 }
@@ -102,10 +107,31 @@ pub fn recall(places: &Value, key: &str) -> Option<(f64, f64)> {
     Some((p["x"].as_f64()?, p["y"].as_f64()?))
 }
 
+/// Where the window goes leaving fullscreen from `filled`: the frame it had (`was`), pulled on screen if its display went;
+/// else, as it started fullscreen, `side` square at the place `kept` for this arrangement, or centred where it is.
+pub fn back(was: Option<R>, kept: Option<(f64, f64)>, side: f64, filled: R, areas: &[R]) -> Option<R> {
+    let to = was.unwrap_or_else(|| {
+        let a = areas.get(nearest(filled, areas).unwrap_or(0)).copied().unwrap_or(filled);
+        let (x, y) = kept.unwrap_or((a.x + (a.w - side) / 2.0, a.y + (a.h - side) / 2.0));
+        R { x, y, w: side, h: side }
+    });
+    let (x, y) = clamp(to, areas)?;
+    Some(R { x, y, ..to })
+}
+
+/// What fullscreen fills: the display `win` is mostly on (or the nearest). On macOS its work area: the menu bar and the
+/// Dock sit above the widget's window level and would cover its edges, the HUD's dock among them. Elsewhere all of it: a
+/// topmost window the display's size is how fullscreen apps fill it there, and the taskbar steps aside.
+pub fn fill(win: R, frames: &[R], areas: &[R], mac: bool) -> Option<R> {
+    let i = nearest(win, frames)?;
+    (if mac { areas } else { frames }).get(i).copied()
+}
+
 // ── the window. macOS lays displays out in points, and a window's physical position is in its own display's scale,
 // so there everything is in points; Windows and X11 have one physical desktop, so there it's physical pixels
 
 struct Desk {
+    frames: Vec<R>,
     areas: Vec<R>,
     scales: Vec<f64>,
     key: String,
@@ -128,7 +154,7 @@ fn desk<T: Runtime>(w: &WebviewWindow<T>) -> Option<Desk> {
         areas.push(R { x: a.position.x as f64 / k, y: a.position.y as f64 / k, w: a.size.width as f64 / k, h: a.size.height as f64 / k });
         scales.push(s);
     }
-    Some(Desk { key: layout_key(&displays), areas, scales })
+    Some(Desk { key: layout_key(&displays), frames: displays.into_iter().map(|d| d.0).collect(), areas, scales })
 }
 
 fn frame<T: Runtime>(w: &WebviewWindow<T>) -> Option<R> {
@@ -146,6 +172,61 @@ fn put<T: Runtime>(w: &WebviewWindow<T>, at: R, x: f64, y: f64) {
     } else {
         w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32))
     };
+}
+
+fn reframe<T: Runtime>(w: &WebviewWindow<T>, at: R, to: R) {
+    put(w, at, to.x, to.y);
+    if (to.w - at.w).abs() < 1.0 && (to.h - at.h).abs() < 1.0 {
+        return;
+    }
+    let _ = if cfg!(target_os = "macos") {
+        w.set_size(tauri::LogicalSize::new(to.w, to.h))
+    } else {
+        w.set_size(tauri::PhysicalSize::new(to.w.round() as u32, to.h.round() as u32))
+    };
+}
+
+// ── fullscreen: not the OS's (on macOS a Space of its own, which a window on every Space, kept on top, from an app with no
+// Dock icon doesn't fit), but the window filling its display
+
+/// While the window fills its display (its frame isn't the widget's place): the frame it had before, if it had one
+pub struct Full(Mutex<Option<Option<R>>>);
+
+impl Full {
+    /// `on`: it starts fullscreen, with no frame of its own to go back to
+    pub fn new(on: bool) -> Self {
+        Full(Mutex::new(on.then_some(None)))
+    }
+}
+
+pub fn filled(app: &AppHandle) -> bool {
+    app.try_state::<Full>().is_some_and(|f| f.0.lock().unwrap().is_some())
+}
+
+/// `on`: the window fills the display it's on (again, if that changed). Off: it goes back where it was, or (if it started
+/// fullscreen) `side` points square at its place for this arrangement. Whether it left fullscreen. With no displays yet
+/// it waits for `arrive`.
+pub fn fullscreen(app: &AppHandle, on: bool, side: f64) -> bool {
+    let (Some(w), Some(full)) = (app.get_webview_window("main"), app.try_state::<Full>()) else { return false };
+    let was = *full.0.lock().unwrap();
+    if !on && was.is_none() {
+        return false;
+    }
+    let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return false };
+    let mac = cfg!(target_os = "macos");
+    if on {
+        let Some(to) = fill(at, &d.frames, &d.areas, mac) else { return false };
+        *full.0.lock().unwrap() = Some(was.unwrap_or(Some(at)));
+        reframe(&w, at, to);
+        return false;
+    }
+    let k = nearest(at, &d.frames).map_or(1.0, |i| if mac { 1.0 } else { d.scales[i] });
+    let kept = app.try_state::<Places>().and_then(|p| recall(&p.list.lock().unwrap(), &d.key));
+    *full.0.lock().unwrap() = None;
+    if let Some(to) = back(was.flatten(), kept, side * k, at, &d.areas) {
+        reframe(&w, at, to);
+    }
+    true
 }
 
 /// the move watcher: woken by every move of the main window
@@ -244,7 +325,7 @@ fn floating(app: &AppHandle) -> bool {
 /// Fullscreen, the window fills its display: nothing to snap, and its place isn't the widget's
 pub fn settle(app: &AppHandle, dragged: bool) {
     let (Some(w), Some(places)) = (app.get_webview_window("main"), app.try_state::<Places>()) else { return };
-    if w.is_fullscreen().unwrap_or(false) {
+    if filled(app) {
         return;
     }
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return };
@@ -261,11 +342,12 @@ pub fn settle(app: &AppHandle, dragged: bool) {
     places.keep(&d.key, x, y);
 }
 
-// the displays changed (or this is the first look): the place kept for this arrangement, else on screen where it is
+// the displays changed (or this is the first look): the place kept for this arrangement, else on screen where it is.
+// Fullscreen, it fills its display again
 fn arrive(app: &AppHandle, first: bool) {
     let Some(w) = app.get_webview_window("main") else { return };
-    if w.is_fullscreen().unwrap_or(false) {
-        return;
+    if filled(app) {
+        return crate::refit(app);
     }
     let (Some(d), Some(at)) = (desk(&w), frame(&w)) else { return };
     let kept = recall(&app.state::<Places>().list.lock().unwrap(), &d.key);
@@ -380,5 +462,32 @@ mod tests {
         }
         assert_eq!(places.as_array().unwrap().len(), KEPT);
         assert_eq!(recall(&places, &one), None, "the oldest go");
+    }
+
+    #[test]
+    fn fullscreen_fills_the_display_the_widget_is_on() {
+        let laptop = (R { x: 0.0, y: 0.0, w: 1512.0, h: 982.0 }, R { x: 0.0, y: 37.0, w: 1512.0, h: 870.0 });
+        let external = (R { x: 1512.0, y: -200.0, w: 2560.0, h: 1440.0 }, R { x: 1512.0, y: -175.0, w: 2560.0, h: 1415.0 });
+        let (frames, areas) = ([laptop.0, external.0], [laptop.1, external.1]);
+        assert_eq!(fill(WIN, &frames, &areas, true), Some(laptop.1), "macOS: the work area, under the menu bar, over the Dock");
+        assert_eq!(fill(WIN, &frames, &areas, false), Some(laptop.0), "elsewhere: the whole display");
+        assert_eq!(fill(R { x: 1400.0, ..WIN }, &frames, &areas, true), Some(external.1), "mostly on the external");
+        assert_eq!(fill(R { x: 5000.0, y: 300.0, ..WIN }, &frames, &areas, false), Some(external.0), "off every display: the nearest");
+        assert_eq!(fill(external.0, &frames[..1], &areas[..1], true), Some(laptop.1), "its display unplugged: refit to the one left");
+        assert_eq!(fill(WIN, &[], &[], true), None);
+    }
+
+    #[test]
+    fn leaving_fullscreen_goes_back_where_it_was() {
+        let laptop = R { x: 0.0, y: 25.0, w: 1512.0, h: 920.0 };
+        let external = R { x: 1512.0, y: 0.0, w: 2560.0, h: 1415.0 };
+        let (filled, was) = (laptop, R { x: 1000.0, y: 500.0, w: 480.0, h: 360.0 });
+        assert_eq!(back(Some(was), Some((8.0, 33.0)), 400.0, filled, &[laptop, external]), Some(was), "the frame it had, size and all");
+        let off = R { x: 3000.0, y: 900.0, ..was };
+        assert_eq!(back(Some(off), None, 400.0, filled, &[laptop]), Some(R { x: 1032.0, y: 585.0, ..was }), "its display went: on screen");
+        let side = R { x: 8.0, y: 33.0, w: 400.0, h: 400.0 };
+        assert_eq!(back(None, Some((8.0, 33.0)), 400.0, filled, &[laptop, external]), Some(side), "started fullscreen: its kept place");
+        assert_eq!(back(None, None, 400.0, external, &[laptop, external]), Some(R { x: 2592.0, y: 507.5, w: 400.0, h: 400.0 }), "no place kept: centred on its display");
+        assert_eq!(back(Some(was), None, 400.0, filled, &[]), None, "no displays: left as it is");
     }
 }
