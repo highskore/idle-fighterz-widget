@@ -77,3 +77,8 @@ test('the tabs count what there is to do', () => {
   assert.deepEqual(C.counts(menu, 9), { up: 9, tree: 2, heroes: '1/2', ach: '1/3' });
   assert.deepEqual(C.counts({}, 0), { up: '', tree: '', heroes: '', ach: '' });
 });
+
+test('the panel marks its menus without the page\'s own [data-menu], which opens the achievements menu on any click inside it', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../control.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/dataset\.menu\b|\[data-menu\b|data-menu=/.test(src));
+});
