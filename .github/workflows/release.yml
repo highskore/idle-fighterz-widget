@@ -402,8 +402,12 @@ jobs:
           if (-not (Test-Path $scr -PathType Leaf)) { Get-ChildItem $exe.DirectoryName; throw 'no IdleFighterZ.scr installed beside the exe' }
           if ($env:SIGNED -and (Get-AuthenticodeSignature $scr).Status -ne 'Valid') { throw 'the installed IdleFighterZ.scr is not validly signed' }
           $env:IDLE_FIGHTERZ_SMOKE = "$env:RUNNER_TEMP\smoke.log"
+          # and fullscreen 3 s in: the window must cover its display exactly, client area and all (no borders spilling over),
+          # and leaving it must give back the frame it had
+          $env:IDLE_FIGHTERZ_SMOKE_FULLSCREEN = '1'
           $p = Start-Process $exe.FullName -PassThru
           Remove-Item Env:IDLE_FIGHTERZ_SMOKE
+          Remove-Item Env:IDLE_FIGHTERZ_SMOKE_FULLSCREEN
           # each line in turn, within 60 s of the launch: a cold runner may take a while to set up (it hides 8 s after
           # setup), and a fixed sleep failed on those. The log goes out either way
           $log = "$env:RUNNER_TEMP\smoke.log"; $until = (Get-Date).AddSeconds(60)
@@ -415,6 +419,12 @@ jobs:
             }
           }
           Expect 'engine: the Rust core' 'the game is not on the Rust core'
+          Expect 'fullscreen: ' 'fullscreen never reported its frame'
+          Select-String -Path $log -SimpleMatch 'fullscreen: ' | ForEach-Object { $_.Line }
+          Expect ': fits' 'fullscreen does not cover its display exactly'
+          Expect 'fullscreen left: ' 'leaving fullscreen never reported its frame'
+          Select-String -Path $log -SimpleMatch 'fullscreen left: ' | ForEach-Object { $_.Line }
+          Expect ': restored' 'leaving fullscreen did not put the frame back'
           Expect 'hid the widget' 'the widget never hid itself'
           Expect 'page hidden=true away=true' 'hidden, the page did not see document.hidden'
           Expect 'hidden: the core plays on' 'hidden, the core did not keep playing'

@@ -179,16 +179,72 @@ fn put<T: Runtime>(w: &WebviewWindow<T>, at: R, x: f64, y: f64) {
     };
 }
 
-fn reframe<T: Runtime>(w: &WebviewWindow<T>, at: R, to: R) {
-    put(w, at, to.x, to.y);
-    if (to.w - at.w).abs() < 1.0 && (to.h - at.h).abs() < 1.0 {
+// What the fullscreen code measures and sets. On Windows that's the client area, which the page fills: the outer frame of
+// an undecorated window can carry invisible resize borders (its shadow), so filling it by the outer size spills them
+// onto the next display
+fn client<T: Runtime>(w: &WebviewWindow<T>) -> Option<R> {
+    if !cfg!(windows) {
+        return frame(w);
+    }
+    let (p, s) = (w.inner_position().ok()?, w.inner_size().ok()?);
+    Some(R { x: p.x as f64, y: p.y as f64, w: s.width as f64, h: s.height as f64 })
+}
+
+/// The outer frame that gives the client area `to`, for a window whose outer frame is `outer` round a client area `client`
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn outer_for(to: R, outer: R, client: R) -> R {
+    R { x: to.x - (client.x - outer.x), y: to.y - (client.y - outer.y), w: to.w + (outer.w - client.w), h: to.h + (outer.h - client.h) }
+}
+
+/// Where a window crossing to another display first goes: small, in the middle of `to`, wholly on that display
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn landing(to: R) -> R {
+    let (w, h) = (to.w.min(200.0) / 2.0, to.h.min(200.0) / 2.0);
+    R { x: (to.x + to.w / 2.0 - w / 2.0).round(), y: (to.y + to.h / 2.0 - h / 2.0).round(), w: w.round(), h: h.round() }
+}
+
+fn near(a: R, b: R) -> bool {
+    (a.x - b.x).abs() < 1.0 && (a.y - b.y).abs() < 1.0 && (a.w - b.w).abs() < 1.0 && (a.h - b.h).abs() < 1.0
+}
+
+// The window to `to`: its client area (fullscreen's fill), or with `outer` its outer frame (the frame it goes back to,
+// as place.rs keeps frames). Windows: by SetWindowPos, position and size at once, the client area placed inside the
+// invisible borders a shadow puts round the frame. Onto a display of another scale (`scale`, the target's), first as a
+// small window there: the DPI change Windows then sends resizes that by the scale ratio, not the filled frame, and the
+// second call lands at the DPI it already has
+fn reframe<T: Runtime>(w: &WebviewWindow<T>, at: R, to: R, outer: bool, scale: f64) {
+    if near(at, to) {
         return;
     }
-    let _ = if cfg!(target_os = "macos") {
-        w.set_size(tauri::LogicalSize::new(to.w, to.h))
-    } else {
-        w.set_size(tauri::PhysicalSize::new(to.w.round() as u32, to.h.round() as u32))
-    };
+    #[cfg(windows)]
+    {
+        // the borders measured each time: they scale with the DPI
+        let place = |to: R| {
+            let (Ok(p), Ok(s), Some(c)) = (w.outer_position(), w.outer_size(), client(w)) else { return };
+            os::set_frame(w, outer_for(to, R { x: p.x as f64, y: p.y as f64, w: s.width as f64, h: s.height as f64 }, c));
+        };
+        if w.scale_factor().is_ok_and(|k| (k - scale).abs() > 0.01) {
+            place(landing(to));
+        }
+        if outer {
+            os::set_frame(w, to);
+        } else {
+            place(to);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (outer, scale);
+        put(w, at, to.x, to.y);
+        if (to.w - at.w).abs() < 1.0 && (to.h - at.h).abs() < 1.0 {
+            return;
+        }
+        let _ = if cfg!(target_os = "macos") {
+            w.set_size(tauri::LogicalSize::new(to.w, to.h))
+        } else {
+            w.set_size(tauri::PhysicalSize::new(to.w.round() as u32, to.h.round() as u32))
+        };
+    }
 }
 
 // ── fullscreen: not the OS's (on macOS a Space of its own, which a window on every Space, kept on top, from an app with no
@@ -220,16 +276,19 @@ pub fn filled(app: &AppHandle) -> bool {
 /// exactly. With no displays yet it's still fullscreen, and `arrive` fills it once there are.
 pub fn fill_display(app: &AppHandle, side: f64, again: bool) {
     let (Some(w), Some(full)) = (app.get_webview_window("main"), app.try_state::<Full>()) else { return };
-    let at = frame(&w);
-    let mut f = full.0.lock().unwrap().unwrap_or(Fill { was: at, side, to: None });
-    let to = at.zip(desk(&w)).and_then(|(at, d)| fill(at, &d.frames, &d.areas, cfg!(target_os = "macos")));
-    let redo = to.is_some() && (again || to != f.to);
+    // the frame it goes back to is the outer one, which a shadow's borders coming or going doesn't move
+    let (at, d) = (client(&w), desk(&w));
+    let mut f = full.0.lock().unwrap().unwrap_or(Fill { was: frame(&w), side, to: None });
+    let to = at.zip(d.as_ref()).and_then(|(at, d)| fill(at, &d.frames, &d.areas, cfg!(target_os = "macos")));
+    // `again`, only if it isn't there: a scale change that resized it, not the one its own fill set off
+    let redo = to.is_some() && (to != f.to || (again && !at.zip(to).is_some_and(|(at, to)| near(at, to))));
     if redo {
         f.to = to;
     }
     *full.0.lock().unwrap() = Some(f);
-    if let (true, Some(at), Some(to)) = (redo, at, to) {
-        reframe(&w, at, to);
+    if let (true, Some(at), Some(to), Some(d)) = (redo, at, to, d) {
+        let scale = nearest(to, &d.frames).map_or(1.0, |i| d.scales[i]);
+        reframe(&w, at, to, false, scale);
     }
 }
 
@@ -244,9 +303,28 @@ pub fn leave_display(app: &AppHandle, side: f64, same: bool) -> bool {
     let keep = same && (f.side - side).abs() < 0.5;
     let kept = app.try_state::<Places>().and_then(|p| recall(&p.list.lock().unwrap(), &d.key));
     if let Some(to) = back(f.was, keep, kept, side * k, at, &d.areas) {
-        reframe(&w, at, to);
+        let scale = nearest(to, &d.frames).map_or(1.0, |i| d.scales[i]);
+        reframe(&w, at, to, true, scale);
     }
     keep && f.was.is_some()
+}
+
+/// For the smoke test: the window's outer frame, and after leaving fullscreen whether it's back to `was`
+pub fn outer(app: &AppHandle) -> Option<R> {
+    frame(&app.get_webview_window("main")?)
+}
+
+pub fn report_back(app: &AppHandle, was: Option<R>) -> String {
+    let now = outer(app);
+    format!("fullscreen left: frame {now:?}, was {was:?}: {}", if now.zip(was).is_some_and(|(a, b)| near(a, b)) { "restored" } else { "moved" })
+}
+
+/// For the smoke test: the window's client area against what fullscreen fills
+pub fn report(app: &AppHandle) -> String {
+    let Some(w) = app.get_webview_window("main") else { return "fullscreen: no window".into() };
+    let (Some(c), Some(d)) = (client(&w), desk(&w)) else { return "fullscreen: no displays".into() };
+    let to = fill(c, &d.frames, &d.areas, cfg!(target_os = "macos"));
+    format!("fullscreen: client {c:?}, fills {to:?}: {}", if to.is_some_and(|to| near(c, to)) { "fits" } else { "differs" })
 }
 
 /// the move watcher: woken by every move of the main window
@@ -400,10 +478,16 @@ mod os {
     #[link(name = "user32")]
     extern "system" {
         fn GetAsyncKeyState(key: i32) -> i16;
+        fn SetWindowPos(hwnd: *mut std::ffi::c_void, after: *mut std::ffi::c_void, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
     }
     // either button: with the buttons swapped, the primary is the physical right one
     pub fn button_down() -> bool {
         unsafe { GetAsyncKeyState(0x01) < 0 || GetAsyncKeyState(0x02) < 0 }
+    }
+    // the outer frame, physical pixels, in one synchronous call; not raised, not focused (SWP_NOZORDER | SWP_NOACTIVATE)
+    pub fn set_frame<T: tauri::Runtime>(w: &tauri::WebviewWindow<T>, r: super::R) {
+        let Ok(hwnd) = w.hwnd() else { return };
+        unsafe { SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32, 0x0004 | 0x0010) };
     }
 }
 
@@ -520,5 +604,94 @@ mod tests {
         let was = R { x: 1000.0, y: 500.0, w: 480.0, h: 360.0 };
         assert_eq!(back(Some(was), false, Some((8.0, 33.0)), 400.0, laptop, &[laptop]), Some(R { x: 1000.0, y: 500.0, w: 400.0, h: 400.0 }));
         assert_eq!(back(Some(was), false, None, 560.0, laptop, &[laptop]), Some(R { x: 952.0, y: 385.0, w: 560.0, h: 560.0 }), "bigger: pulled on screen");
+    }
+
+    // Windows, three displays in physical pixels: a 1.5× laptop left of and below the primary (negative x), the 1× primary,
+    // and a 2× 4K one right of it and higher (negative y)
+    const LEFT: R = R { x: -2880.0, y: 360.0, w: 2880.0, h: 1800.0 };
+    const MIDDLE: R = R { x: 0.0, y: 0.0, w: 2560.0, h: 1440.0 };
+    const RIGHT: R = R { x: 2560.0, y: -720.0, w: 3840.0, h: 2160.0 };
+    const THREE: [R; 3] = [LEFT, MIDDLE, RIGHT];
+
+    #[test]
+    fn three_displays_fill_exactly_one() {
+        for (win, want) in [
+            (R { x: 100.0, y: 100.0, w: 600.0, h: 600.0 }, MIDDLE),
+            (R { x: -700.0, y: 500.0, w: 600.0, h: 600.0 }, LEFT),
+            (R { x: 3000.0, y: -600.0, w: 800.0, h: 800.0 }, RIGHT),
+            (R { x: 2300.0, y: 200.0, w: 600.0, h: 600.0 }, RIGHT),
+            (R { x: -200.0, y: 600.0, w: 600.0, h: 600.0 }, MIDDLE),
+            (R { x: 2560.0, y: 0.0, w: 3840.0, h: 2160.0 }, RIGHT),
+        ] {
+            let to = fill(win, &THREE, &THREE, false).unwrap();
+            assert_eq!(to, want, "{win:?}");
+            for other in THREE.iter().filter(|o| **o != want) {
+                assert_eq!(to.overlap(other), 0.0, "{win:?} spills onto {other:?}");
+            }
+        }
+        // the primary's fill, grown 1.5× by a DPI change: still most on the primary, so filled back there
+        assert_eq!(fill(R { w: 3840.0, h: 2160.0, ..MIDDLE }, &THREE, &THREE, false), Some(MIDDLE));
+    }
+
+    // an undecorated window with a shadow: 7px invisible borders left, right and below, none above
+    #[test]
+    fn the_client_area_fills_the_display_not_the_outer_frame() {
+        let (outer, client) = (R { x: 93.0, y: 100.0, w: 614.0, h: 607.0 }, R { x: 100.0, y: 100.0, w: 600.0, h: 600.0 });
+        assert_eq!(outer_for(MIDDLE, outer, client), R { x: -7.0, y: 0.0, w: 2574.0, h: 1447.0 });
+        assert_eq!(outer_for(RIGHT, client, client), RIGHT, "no borders: the frame is the client area");
+    }
+
+    // the boss's set-up: a 2560×1140 case display at 100% beside 150% and 125% monitors, physical pixels, in the
+    // arrangements Windows allows (below, above with a negative origin, to the side, and turned on its end)
+    #[test]
+    fn a_case_display_beside_scaled_monitors_fills_on_its_own() {
+        let main = R { x: 0.0, y: 0.0, w: 3840.0, h: 2160.0 }; // 4K at 150%
+        let side = R { x: -3200.0, y: 180.0, w: 3200.0, h: 1800.0 }; // 2560×1440 at 125%
+        let layouts = [
+            ("below", R { x: 640.0, y: 2160.0, w: 2560.0, h: 1140.0 }),
+            ("above", R { x: 0.0, y: -1140.0, w: 2560.0, h: 1140.0 }),
+            ("right", R { x: 3840.0, y: 500.0, w: 2560.0, h: 1140.0 }),
+            ("turned", R { x: 3840.0, y: -200.0, w: 1140.0, h: 2560.0 }),
+            ("left of the side", R { x: -5760.0, y: 900.0, w: 2560.0, h: 1140.0 }),
+        ];
+        for (name, case) in layouts {
+            let all = [side, main, case];
+            let on = |r: R, x: f64, y: f64| R { x: r.x + x, y: r.y + y, w: 700.0, h: 500.0 };
+            for (win, want) in [(on(case, 40.0, 40.0), case), (on(main, 300.0, 300.0), main), (on(side, 100.0, 100.0), side), (R { x: case.x - 200.0, y: case.y + 100.0, w: 700.0, h: 500.0 }, case)] {
+                let to = fill(win, &all, &all, false).unwrap();
+                assert_eq!(to, want, "{name}: {win:?}");
+                for other in all.iter().filter(|o| **o != want) {
+                    assert_eq!(to.overlap(other), 0.0, "{name}: the fill spills onto {other:?}");
+                }
+            }
+            // from the 150% main's fill to the 100% case display it goes there small first, wholly on it
+            let l = landing(case);
+            assert_eq!(l.overlap(&case), l.w * l.h, "{name}: the landing is on the case display");
+            assert_eq!(fill(l, &all, &all, false), Some(case), "{name}: and fills it");
+            // a DPI change of 1.5 to 1 shrinks the landing by two thirds: still on the case display
+            let shrunk = R { w: (l.w / 1.5).round(), h: (l.h / 1.5).round(), ..l };
+            assert_eq!(fill(shrunk, &all, &all, false), Some(case), "{name}");
+            // and the main's fill grown 1.25× by a DPI change still re-fits to the main
+            assert_eq!(fill(R { w: main.w * 1.25, h: main.h * 1.25, ..main }, &all, &all, false), Some(main), "{name}");
+        }
+    }
+
+    // window mode, fullscreen and back on Windows, as the app does it: the shadow's insets (7px left, right and below)
+    // come and go round an outer frame that stays put, so the frame kept and put back is the outer one
+    #[test]
+    fn a_fullscreen_round_trip_puts_the_frame_back() {
+        let client = |o: R, shadow: bool| if shadow { R { x: o.x + 7.0, y: o.y, w: o.w - 14.0, h: o.h - 7.0 } } else { o };
+        let start = R { x: 400.0, y: 300.0, w: 614.0, h: 607.0 };
+        let was = start; // kept before anything moves
+        // the shadow off (the client area grows to the frame), then the fill through outer_for
+        let filled = outer_for(MIDDLE, start, client(start, false));
+        assert_eq!(client(filled, false), MIDDLE, "filled exactly");
+        // the shadow back on, then the outer frame it had: no growth, no drift
+        let back = was;
+        assert_eq!((back, client(back, true)), (start, client(start, true)));
+        // 0.6.0's way, the client area kept after the shadow went and put back as a client area: 14×7 bigger, 7 left
+        let kept = client(start, false);
+        let grown = outer_for(kept, filled, client(filled, true));
+        assert_eq!((grown.x - start.x, grown.w - start.w, grown.h - start.h), (-7.0, 14.0, 7.0));
     }
 }
