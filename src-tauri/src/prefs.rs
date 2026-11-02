@@ -59,12 +59,23 @@ pub const THEMES: [&str; 3] = ["light", "dark", "auto"];
 /// the ability buttons' looks (game/widget.css `data-kibtn`): the ki meter (the default) fills as they recharge, classic
 /// counts down
 pub const KI_BUTTONS: [&str; 2] = ["meter", "classic"];
-/// the planet sizes in window mode and fullscreen (game/widget.js PLANET_FILL): the share of the window it fills
+/// the planet and UI sizes in window mode and fullscreen (game/world.js PLANET_FLOOR, UI_SIZE), smallest first
 pub const PLANET_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
+pub const UI_SIZES: [&str; 4] = PLANET_SIZES;
 
-/// a skin, theme, ki buttons look, mode or planet size this version doesn't know (a newer one's, or a typo) goes back to the default
+/// A step along `sizes` from `cur` (a size it doesn't know is medium), held at either end; 0 is medium
+pub fn step(sizes: &[&'static str], cur: &Value, by: i64) -> &'static str {
+    let medium = sizes.iter().position(|s| *s == "medium").unwrap_or(0);
+    if by == 0 {
+        return sizes[medium];
+    }
+    let at = sizes.iter().position(|s| cur.as_str() == Some(*s)).unwrap_or(medium) as i64;
+    sizes[(at + by.signum()).clamp(0, sizes.len() as i64 - 1) as usize]
+}
+
+/// a skin, theme, ki buttons look, mode, planet or UI size this version doesn't know (a newer one's, or a typo) goes back to the default
 pub fn known_look(s: &mut Value) {
-    let known = [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light"), ("ki_buttons", &KI_BUTTONS[..], "meter"), ("mode", &MODES[..], "floating"), ("mode_prev", &MODES[..2], "floating"), ("planet_size", &PLANET_SIZES[..], "medium")];
+    let known = [("skin", &SKINS[..], "classic"), ("theme", &THEMES[..], "light"), ("ki_buttons", &KI_BUTTONS[..], "meter"), ("mode", &MODES[..], "floating"), ("mode_prev", &MODES[..2], "floating"), ("planet_size", &PLANET_SIZES[..], "medium"), ("ui_size", &UI_SIZES[..], "medium")];
     for (key, known, fallback) in known {
         if !s[key].as_str().is_some_and(|v| known.contains(&v)) {
             s[key] = json!(fallback);
@@ -97,6 +108,7 @@ pub fn vet(update: &mut Value) {
         "mode" => v.as_str().is_some_and(|v| MODES.contains(&v)),
         "mode_prev" => v.as_str().is_some_and(|v| MODES[..2].contains(&v)),
         "planet_size" => v.as_str().is_some_and(|v| PLANET_SIZES.contains(&v)),
+        "ui_size" => v.as_str().is_some_and(|v| UI_SIZES.contains(&v)),
         _ => true,
     };
     o.retain(|k, v| ok(k, v));
@@ -104,10 +116,10 @@ pub fn vet(update: &mut Value) {
 
 /// what a profile keeps: how the widget looks and behaves, and which settings window and menu-bar click it has. Not the
 /// shortcut, login, updates, the tray icon's colour, a snooze, the first-run card, or the profiles themselves
-pub const PROFILE_KEYS: [&str; 27] = [
+pub const PROFILE_KEYS: [&str; 28] = [
     "on_top", "size", "opacity", "layout", "hud", "clouds", "cloud_shape", "cloud_amount", "mode", "fps", "ghost", "auto_hide",
     "battery_auto", "menubar_power", "notify", "quiet", "follow_focus", "recap", "sound", "skin", "theme", "settings_style", "tray_style", "raid_windows", "screen_beam",
-    "ki_buttons", "planet_size",
+    "ki_buttons", "planet_size", "ui_size",
 ];
 pub const MAX_PROFILES: usize = 12;
 pub const MAX_NAME: usize = 24;
@@ -267,10 +279,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_skin_theme_ki_buttons_mode_or_planet_size_is_the_default() {
-        let defaults = json!({ "skin": "classic", "theme": "light", "ki_buttons": "meter", "mode": "floating", "mode_prev": "floating", "planet_size": "medium" });
+    fn an_unknown_skin_theme_ki_buttons_mode_or_size_is_the_default() {
+        let defaults = json!({ "skin": "classic", "theme": "light", "ki_buttons": "meter", "mode": "floating", "mode_prev": "floating", "planet_size": "medium", "ui_size": "medium" });
         for (skin, theme, ki, mode) in [(json!("manga"), json!("sepia"), json!("gauge"), json!("kiosk")), (json!(3), json!(null), json!(2), json!(1)), (json!(""), json!(true), json!(null), json!(null))] {
-            let mut s = json!({ "skin": skin, "theme": theme, "ki_buttons": ki, "mode": mode, "mode_prev": mode, "planet_size": mode });
+            let mut s = json!({ "skin": skin, "theme": theme, "ki_buttons": ki, "mode": mode, "mode_prev": mode, "planet_size": mode, "ui_size": mode });
             known_look(&mut s);
             assert_eq!(s, defaults);
         }
@@ -281,7 +293,7 @@ mod tests {
             for theme in THEMES {
                 for ki in KI_BUTTONS {
                     for (mode, prev) in [("floating", "window"), ("window", "floating"), ("fullscreen", "window")] {
-                        let kept = json!({ "skin": skin, "theme": theme, "ki_buttons": ki, "mode": mode, "mode_prev": prev, "planet_size": "huge" });
+                        let kept = json!({ "skin": skin, "theme": theme, "ki_buttons": ki, "mode": mode, "mode_prev": prev, "planet_size": "huge", "ui_size": "small" });
                         let mut s = kept.clone();
                         known_look(&mut s);
                         assert_eq!(s, kept, "kept");
@@ -294,7 +306,7 @@ mod tests {
     // a profile saved by a newer version (or edited by hand) can't set what this one doesn't have
     #[test]
     fn an_update_keeps_only_layouts_and_looks_there_are() {
-        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "ki_buttons": "gauge", "mode": "kiosk", "mode_prev": "fullscreen", "planet_size": "giant", "size": 300 });
+        let mut p = json!({ "layout": 4, "skin": "manga", "theme": 3, "ki_buttons": "gauge", "mode": "kiosk", "mode_prev": "fullscreen", "planet_size": "giant", "ui_size": 2, "size": 300 });
         vet(&mut p);
         assert_eq!(p, json!({ "size": 300 }));
         for mode in MODES {
@@ -306,9 +318,9 @@ mod tests {
         vet(&mut p);
         assert_eq!(p, json!({ "mode_prev": "window" }), "kept");
         for size in PLANET_SIZES {
-            let mut p = json!({ "planet_size": size });
+            let mut p = json!({ "planet_size": size, "ui_size": size });
             vet(&mut p);
-            assert_eq!(p, json!({ "planet_size": size }), "kept");
+            assert_eq!(p, json!({ "planet_size": size, "ui_size": size }), "kept");
         }
         for layout in LAYOUTS {
             let mut p = json!({ "layout": layout, "skin": "drawer", "theme": "auto", "ki_buttons": "meter" });
@@ -353,5 +365,16 @@ mod tests {
             keep_prev(&json!({ "mode": "floating" }), &mut v);
             assert_eq!(v, u, "not picking fullscreen");
         }
+    }
+
+    // the widget's ⌘/ctrl +, −, 0 and ⌥/alt +, −, 0
+    #[test]
+    fn sizes_step_and_hold_at_the_ends() {
+        let s = |cur: &str, by| step(&UI_SIZES, &json!(cur), by);
+        assert_eq!([s("small", 1), s("medium", 1), s("large", 1), s("huge", 1)], ["medium", "large", "huge", "huge"]);
+        assert_eq!([s("huge", -1), s("large", -1), s("medium", -1), s("small", -1)], ["large", "medium", "small", "small"]);
+        assert_eq!([s("small", 0), s("huge", 0)], ["medium", "medium"], "0 is medium");
+        assert_eq!(s("giant", 1), "large", "one it doesn't know steps from medium");
+        assert_eq!(step(&PLANET_SIZES, &json!(null), -3), "small", "one step at a time");
     }
 }

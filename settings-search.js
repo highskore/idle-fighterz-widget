@@ -14,6 +14,7 @@
     battery_auto: 'power battery unplugged laptop energy low power mode saver',
     mode: 'floating window card frame background fullscreen full screen maximise maximize',
     planet_size: 'planet size bigger smaller zoom scale huge large small',
+    ui_size: 'ui interface hud buttons text font size bigger smaller zoom scale huge large small',
     ghost: 'click through clickthrough mouse ignore clicks input passthrough',
     auto_hide: 'fullscreen full screen presentation slideshow games hide',
     clouds: 'weather sky',
